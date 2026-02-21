@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
-MAX_DURATION_S = 60  # MLX VAE needs <14.3GB; 90s→15.6GB fails, 60s→9.7GB passes
+from config import MAX_DURATION_S  # set at startup based on unified memory (see config.py)
 
 
 class RadioState(str, Enum):
@@ -24,8 +24,7 @@ class SongPrompt(BaseModel):
     @field_validator("duration")
     @classmethod
     def clamp_duration(cls, v: int) -> int:
-        """Hard cap — MLX VAE requires a single Metal buffer; 60s fits (9.7GB),
-        90s does not (15.6GB > 14.3GB M3 limit) causing a slow PyTorch fallback."""
+        """Hard cap — safety net in case the LLM ignores the prompt instruction."""
         return min(v, MAX_DURATION_S)
 
 
