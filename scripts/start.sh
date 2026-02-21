@@ -23,9 +23,9 @@ export PATH="$HOME/.local/bin:$PATH"
 # ── 1. Ollama ──────────────────────────────────────────────────────────────
 OLLAMA_PID=""
 if pgrep -x "ollama" > /dev/null 2>&1; then
-  echo "[1/4] Ollama already running."
+  echo "[1/5] Ollama already running."
 else
-  echo "[1/4] Starting Ollama..."
+  echo "[1/5] Starting Ollama..."
   ollama serve > /tmp/generative-radio-ollama.log 2>&1 &
   OLLAMA_PID=$!
   echo "  Ollama PID: $OLLAMA_PID  (log: /tmp/generative-radio-ollama.log)"
@@ -42,11 +42,11 @@ if [ ! -d "$ACESTEP_DIR" ]; then
 fi
 
 if curl -sf http://localhost:8001/health > /dev/null 2>&1; then
-  echo "[2/4] ACE-Step API already running — reusing existing process."
+  echo "[2/5] ACE-Step API already running — reusing existing process."
   # Capture PID so it shows in the shutdown message, but we won't kill it on exit either way
   ACESTEP_PID=$(lsof -ti tcp:8001 2>/dev/null | head -1 || echo "unknown")
 else
-  echo "[2/4] Starting ACE-Step 1.5 API server..."
+  echo "[2/5] Starting ACE-Step 1.5 API server..."
   cd "$ACESTEP_DIR"
   ACESTEP_LM_BACKEND=mlx \
   TOKENIZERS_PARALLELISM=false \
@@ -74,7 +74,7 @@ else
 fi
 
 # ── 3. FastAPI Backend ─────────────────────────────────────────────────────
-echo "[3/4] Starting FastAPI backend..."
+echo "[3/5] Starting FastAPI backend..."
 
 # Clear any stale process still holding port 5555 (e.g. from a previous run)
 STALE_BACKEND=$(lsof -ti tcp:5555 2>/dev/null || true)
@@ -105,7 +105,7 @@ cd "$PROJECT_DIR"
 echo "  Backend PID: $BACKEND_PID  (log: /tmp/generative-radio-backend.log)"
 
 # ── 4. Frontend Dev Server ─────────────────────────────────────────────────
-echo "[4/4] Starting frontend dev server..."
+echo "[4/5] Starting frontend dev server..."
 
 # Clear any stale process still holding port 5173
 STALE_FRONTEND=$(lsof -ti tcp:5173 2>/dev/null || true)
@@ -121,32 +121,63 @@ FRONTEND_PID=$!
 cd "$PROJECT_DIR"
 echo "  Frontend PID: $FRONTEND_PID  (log: /tmp/generative-radio-frontend.log)"
 
+# ── 5. Cloudflare Tunnel ────────────────────────────────────────────────────
+echo "[5/5] Starting Cloudflare quick tunnel..."
+CLOUDFLARED_PID=""
+TUNNEL_URL=""
+
+if ! command -v cloudflared &>/dev/null; then
+  echo "  cloudflared not found — skipping tunnel. Run ./scripts/setup.sh to install."
+else
+  cloudflared tunnel --url http://localhost:5173 \
+    > /tmp/generative-radio-cloudflared.log 2>&1 &
+  CLOUDFLARED_PID=$!
+  echo "  Cloudflared PID: $CLOUDFLARED_PID  (log: /tmp/generative-radio-cloudflared.log)"
+
+  echo "  Waiting for tunnel URL..."
+  WAIT=0
+  until [[ -n "$TUNNEL_URL" ]]; do
+    sleep 1
+    WAIT=$((WAIT + 1))
+    TUNNEL_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' \
+      /tmp/generative-radio-cloudflared.log 2>/dev/null | head -1 || true)
+    if [ $WAIT -ge 30 ]; then
+      echo "  WARNING: Tunnel URL not found after 30s — check /tmp/generative-radio-cloudflared.log"
+      TUNNEL_URL="(unavailable — see log)"
+      break
+    fi
+  done
+fi
+
 echo ""
 echo "╔══════════════════════════════════════════════╗"
 echo "║       Generative Radio is live!              ║"
 echo "╠══════════════════════════════════════════════╣"
-echo "║  Open:       http://localhost:5173           ║"
+echo "║  Local:      http://localhost:5173           ║"
+echo "║  Remote:     $TUNNEL_URL"
 echo "║                                              ║"
 echo "║  Backend:    http://localhost:5555           ║"
 echo "║  ACE-Step:   http://localhost:8001           ║"
 echo "║  Ollama:     http://localhost:11434          ║"
 echo "╠══════════════════════════════════════════════╣"
 echo "║  Logs:                                       ║"
-echo "║    Backend:  /tmp/generative-radio-backend.log  ║"
-echo "║    ACE-Step: /tmp/generative-radio-acestep.log  ║"
+echo "║    Backend:  /tmp/generative-radio-backend.log    ║"
+echo "║    ACE-Step: /tmp/generative-radio-acestep.log    ║"
+echo "║    Tunnel:   /tmp/generative-radio-cloudflared.log║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""
 echo "Press Ctrl+C to stop all services."
 echo ""
 
-# Shutdown hook — stop the app (backend + frontend + optionally Ollama),
+# Shutdown hook — stop the app (backend + frontend + tunnel + optionally Ollama),
 # but intentionally leave ACE-Step running. ACE-Step takes minutes to warm
 # up and may be mid-generation; killing it here costs you the next restart.
 # To stop ACE-Step manually: kill <PID shown above>
 cleanup() {
   echo ""
-  echo "Shutting down backend and frontend..."
+  echo "Shutting down backend, frontend, and tunnel..."
   kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null
+  [[ -n "$CLOUDFLARED_PID" ]] && kill "$CLOUDFLARED_PID" 2>/dev/null
   [[ -n "$OLLAMA_PID" ]] && kill "$OLLAMA_PID" 2>/dev/null
   echo ""
   echo "  ⚠  ACE-Step (PID $ACESTEP_PID) is still running."
