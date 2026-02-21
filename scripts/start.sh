@@ -17,6 +17,9 @@ echo ""
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export PYTORCH_ENABLE_MPS_FALLBACK=1
 
+# Ensure uv (installed to ~/.local/bin by astral.sh installer) is on PATH
+export PATH="$HOME/.local/bin:$PATH"
+
 # ── 1. Ollama ──────────────────────────────────────────────────────────────
 OLLAMA_PID=""
 if pgrep -x "ollama" > /dev/null 2>&1; then
@@ -73,6 +76,14 @@ fi
 # ── 3. FastAPI Backend ─────────────────────────────────────────────────────
 echo "[3/4] Starting FastAPI backend..."
 
+# Clear any stale process still holding port 5555 (e.g. from a previous run)
+STALE_BACKEND=$(lsof -ti tcp:5555 2>/dev/null || true)
+if [[ -n "$STALE_BACKEND" ]]; then
+  echo "  Clearing stale backend process on port 5555 (PID $STALE_BACKEND)..."
+  kill -9 $STALE_BACKEND 2>/dev/null || true
+  sleep 1
+fi
+
 VENV="$PROJECT_DIR/backend/.venv"
 if [ ! -f "$VENV/bin/uvicorn" ]; then
   echo ""
@@ -95,6 +106,15 @@ echo "  Backend PID: $BACKEND_PID  (log: /tmp/generative-radio-backend.log)"
 
 # ── 4. Frontend Dev Server ─────────────────────────────────────────────────
 echo "[4/4] Starting frontend dev server..."
+
+# Clear any stale process still holding port 5173
+STALE_FRONTEND=$(lsof -ti tcp:5173 2>/dev/null || true)
+if [[ -n "$STALE_FRONTEND" ]]; then
+  echo "  Clearing stale frontend process on port 5173 (PID $STALE_FRONTEND)..."
+  kill -9 $STALE_FRONTEND 2>/dev/null || true
+  sleep 1
+fi
+
 cd "$PROJECT_DIR/frontend"
 npm run dev > /tmp/generative-radio-frontend.log 2>&1 &
 FRONTEND_PID=$!

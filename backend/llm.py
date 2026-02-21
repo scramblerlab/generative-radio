@@ -5,7 +5,7 @@ import time
 
 from ollama import chat
 from models import SongPrompt
-from config import OLLAMA_MODEL
+from config import OLLAMA_MODEL, MAX_DURATION_S
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ that ACE-Step understands: sub-genre, instruments, mood, tempo feel, vocal style
 - Lyrics should be creative and evocative, not generic or clichéd
 - Keep lyrics concise: 4–8 lines per section
 - BPM must match the genre and mood naturally
-        - Duration must be exactly 60 seconds"""
+        - Duration must be exactly {MAX_DURATION_S} seconds"""
 
         t0 = time.monotonic()
         try:
