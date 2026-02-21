@@ -21,8 +21,9 @@ else
 fi
 
 # ── System tools ───────────────────────────────────────────────────────────
-echo "[2/7] Installing system tools (python@3.11, node, ffmpeg, git-lfs)..."
+echo "[2/7] Installing system tools (python@3.11, node, ffmpeg, git-lfs, cloudflared)..."
 brew install python@3.11 node ffmpeg git-lfs 2>/dev/null || true
+brew install cloudflare/cloudflare/cloudflared 2>/dev/null || true
 git lfs install
 
 # ── uv ─────────────────────────────────────────────────────────────────────
