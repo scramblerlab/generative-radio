@@ -1,0 +1,32 @@
+GENRES = [
+    {"id": "rock",       "label": "Rock",       "icon": "🎸", "subgenres": ["indie rock", "alternative rock", "classic rock", "punk rock", "post-rock"]},
+    {"id": "pop",        "label": "Pop",        "icon": "🎤", "subgenres": ["synth pop", "indie pop", "electropop", "dream pop", "art pop"]},
+    {"id": "jazz",       "label": "Jazz",       "icon": "🎷", "subgenres": ["smooth jazz", "bebop", "cool jazz", "jazz fusion", "bossa nova"]},
+    {"id": "electronic", "label": "Electronic", "icon": "🎹", "subgenres": ["ambient electronic", "house", "techno", "drum and bass", "synthwave"]},
+    {"id": "hiphop",     "label": "Hip-Hop",    "icon": "🎙️", "subgenres": ["boom bap", "trap", "lo-fi hip hop", "conscious hip hop", "jazz rap"]},
+    {"id": "classical",  "label": "Classical",  "icon": "🎻", "subgenres": ["orchestral", "chamber music", "piano solo", "romantic era", "minimalist"]},
+    {"id": "lofi",       "label": "Lo-Fi",      "icon": "📻", "subgenres": ["lo-fi hip hop", "lo-fi chill", "lo-fi jazz", "lo-fi ambient", "chillhop"]},
+    {"id": "ambient",    "label": "Ambient",    "icon": "🌊", "subgenres": ["dark ambient", "space ambient", "nature ambient", "drone", "new age"]},
+    {"id": "rnb",        "label": "R&B",        "icon": "💜", "subgenres": ["neo soul", "contemporary R&B", "funk", "quiet storm", "alternative R&B"]},
+    {"id": "folk",       "label": "Folk",       "icon": "🪕", "subgenres": ["indie folk", "acoustic folk", "folk rock", "Americana", "chamber folk"]},
+    {"id": "metal",      "label": "Metal",      "icon": "🤘", "subgenres": ["progressive metal", "doom metal", "symphonic metal", "post-metal", "melodic death metal"]},
+    {"id": "country",    "label": "Country",    "icon": "🤠", "subgenres": ["alt-country", "country pop", "bluegrass", "outlaw country", "country rock"]},
+]
+
+KEYWORDS = [
+    {"id": "energetic",   "label": "Energetic"},
+    {"id": "melancholic", "label": "Melancholic"},
+    {"id": "dreamy",      "label": "Dreamy"},
+    {"id": "aggressive",  "label": "Aggressive"},
+    {"id": "chill",       "label": "Chill"},
+    {"id": "upbeat",      "label": "Upbeat"},
+    {"id": "dark",        "label": "Dark"},
+    {"id": "romantic",    "label": "Romantic"},
+    {"id": "ethereal",    "label": "Ethereal"},
+    {"id": "groovy",      "label": "Groovy"},
+    {"id": "epic",        "label": "Epic"},
+    {"id": "nostalgic",   "label": "Nostalgic"},
+    {"id": "minimal",     "label": "Minimal"},
+    {"id": "psychedelic", "label": "Psychedelic"},
+    {"id": "cinematic",   "label": "Cinematic"},
+]

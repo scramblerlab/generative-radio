@@ -1,0 +1,380 @@
+import { useState, useEffect, useRef, useCallback, RefObject } from 'react';
+import {
+  Track,
+  RadioStatus,
+  WSMessage,
+  TrackReadyData,
+  StatusData,
+  ErrorData,
+  ActivityEntry,
+  ProgressData,
+} from '../types';
+
+export interface UseRadioReturn {
+  status: RadioStatus;
+  currentTrack: Track | null;
+  nextReady: boolean;
+  statusMessage: string;
+  errorMessage: string | null;
+  activityLog: ActivityEntry[];
+  start: (genres: string[], keywords: string[]) => Promise<void>;
+  stop: () => Promise<void>;
+  rewind: () => void;
+  audioRef: RefObject<HTMLAudioElement | null>;
+  progress: number; // 0–1
+}
+
+const WS_URL = '/ws';
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_MAX_MS = 16_000;
+
+export function useRadio(): UseRadioReturn {
+  const [status, setStatus] = useState<RadioStatus>('idle');
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
+  const [nextReady, setNextReady] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+  const [progress, setProgress] = useState(0);
+  const activityIdRef = useRef(0);
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const nextTrackRef = useRef<Track | null>(null);        // Pre-buffered next track metadata
+  const preloadBlobUrlRef = useRef<string | null>(null);  // In-memory blob URL for the next track
+  const activeBlobUrlRef = useRef<string | null>(null);   // Blob URL currently being played (revoke on next transition)
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectDelay = useRef(RECONNECT_BASE_MS);
+  const isActiveRef = useRef(false);                      // True while radio should maintain WS
+
+  // ------------------------------------------------------------------ //
+  // Blob URL lifecycle helpers
+  // ------------------------------------------------------------------ //
+
+  /** Revoke and clear any existing pre-fetched blob URL. */
+  const clearPreloadBlob = useCallback(() => {
+    if (preloadBlobUrlRef.current) {
+      URL.revokeObjectURL(preloadBlobUrlRef.current);
+      preloadBlobUrlRef.current = null;
+      console.log('[Audio] Pre-fetch blob URL revoked (superseded or session ended)');
+    }
+  }, []);
+
+  /** Revoke and clear the blob URL for the track that just finished playing. */
+  const clearActiveBlob = useCallback(() => {
+    if (activeBlobUrlRef.current) {
+      URL.revokeObjectURL(activeBlobUrlRef.current);
+      activeBlobUrlRef.current = null;
+    }
+  }, []);
+
+  // ------------------------------------------------------------------ //
+  // Audio progress tracking
+  // ------------------------------------------------------------------ //
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const onTimeUpdate = () => {
+      if (audio.duration > 0) {
+        setProgress(audio.currentTime / audio.duration);
+      }
+    };
+    audio.addEventListener('timeupdate', onTimeUpdate);
+    return () => audio.removeEventListener('timeupdate', onTimeUpdate);
+  // audioRef is a stable object; the effect only needs to run once at mount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ------------------------------------------------------------------ //
+  // Internal helpers
+  // ------------------------------------------------------------------ //
+
+  const sendWS = useCallback((data: object) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      const payload = JSON.stringify(data);
+      console.log('[WS] Sending:', data);
+      wsRef.current.send(payload);
+    } else {
+      console.warn('[WS] Cannot send — socket not open:', wsRef.current?.readyState);
+    }
+  }, []);
+
+  const playTrack = useCallback((track: Track) => {
+    console.log('[Audio] Playing track:', track.songTitle);
+    setCurrentTrack(track);
+    setProgress(0);
+    setErrorMessage(null);
+
+    // Revoke the previously active blob URL — the old track is no longer needed.
+    clearActiveBlob();
+
+    const audio = audioRef.current;
+    if (audio) {
+      const blobUrl = preloadBlobUrlRef.current;
+
+      if (blobUrl) {
+        // Pre-fetch completed — play from the in-memory blob URL instantly.
+        console.log('[Audio] ✓ Using pre-fetched blob URL — zero network wait for:', track.songTitle);
+        audio.src = blobUrl;
+        activeBlobUrlRef.current = blobUrl;  // Track for later revocation
+        preloadBlobUrlRef.current = null;
+      } else {
+        // No pre-fetch available — fall back to direct backend URL.
+        // This happens for the first track and on buffering-recovery paths.
+        console.warn('[Audio] ✗ No pre-fetched blob — fetching directly from backend:', track.songTitle);
+        audio.src = track.audioUrl;
+        activeBlobUrlRef.current = null;
+      }
+
+      audio.play().catch((err) => {
+        console.error('[Audio] play() failed:', err);
+      });
+    }
+  }, [clearActiveBlob]);
+
+  /**
+   * Pre-fetch the next track's audio bytes and store as a blob URL.
+   * Called as soon as the server signals that the next track is ready.
+   * The download runs entirely in the background while the current track plays.
+   */
+  const prefetchNextTrack = useCallback((track: Track) => {
+    clearPreloadBlob(); // Clear any stale pre-fetch from a previous cycle
+    const t0 = performance.now();
+    console.log('[Audio] Pre-fetch starting for:', track.songTitle, '—', track.audioUrl);
+
+    fetch(track.audioUrl)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+        preloadBlobUrlRef.current = URL.createObjectURL(blob);
+        console.log(
+          `[Audio] Pre-fetch complete for "${track.songTitle}" in ${elapsed}s` +
+          ` — ${(blob.size / 1024).toFixed(0)} KB buffered in memory`
+        );
+      })
+      .catch((err) => {
+        console.error('[Audio] Pre-fetch failed for', track.songTitle, ':', err);
+      });
+  }, [clearPreloadBlob]);
+
+  const handleTrackEnded = useCallback(() => {
+    const blobReady = preloadBlobUrlRef.current !== null;
+    console.log(
+      '[Audio] Track ended —',
+      nextTrackRef.current ? `next track: "${nextTrackRef.current.songTitle}"` : 'no next track cached',
+      `| blob pre-fetched: ${blobReady}`
+    );
+    setProgress(0);
+
+    // Notify the backend regardless of which path we take
+    sendWS({ event: 'track_ended' });
+
+    if (nextTrackRef.current) {
+      // Happy path: next track metadata is ready (blob may or may not be ready)
+      const next = nextTrackRef.current;
+      nextTrackRef.current = null;
+      setNextReady(false);
+      setStatus('playing');
+      playTrack(next);
+    } else {
+      // Buffering path: waiting for server to send the next track
+      console.log('[Radio] No next track cached — entering buffering state');
+      setStatus('buffering');
+      setStatusMessage('Buffering next track...');
+    }
+  }, [sendWS, playTrack]);
+
+  // ------------------------------------------------------------------ //
+  // WebSocket connection
+  // ------------------------------------------------------------------ //
+
+  const connectWebSocket = useCallback(() => {
+    if (!isActiveRef.current) return;
+
+    console.log('[WS] Connecting to', WS_URL, '...');
+    setStatus('connecting');
+
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('[WS] Connection established');
+      reconnectDelay.current = RECONNECT_BASE_MS;
+    };
+
+    ws.onmessage = (event: MessageEvent) => {
+      let msg: WSMessage;
+      try {
+        msg = JSON.parse(event.data as string) as WSMessage;
+      } catch {
+        console.error('[WS] Failed to parse message:', event.data);
+        return;
+      }
+
+      console.log('[WS] Received event:', msg.event, msg.data);
+
+      if (msg.event === 'track_ready') {
+        const { track, isNext } = msg.data as unknown as TrackReadyData;
+
+        if (!isNext) {
+          // Server says: play this track now (first track or buffering-recovery path).
+          // Clear nextTrackRef — the buffering path sends isNext=true then isNext=false
+          // for the same track; without this clear, handleTrackEnded would replay it.
+          console.log('[Radio] track_ready (current) — playing:', track.songTitle);
+          nextTrackRef.current = null;
+          setNextReady(false);
+          setStatus('playing');
+          playTrack(track);
+        } else {
+          // Server says: this is the next track — start pre-fetching its audio bytes
+          // immediately so they're ready in memory before the current track ends.
+          console.log('[Radio] track_ready (next, pre-buffering) —', track.songTitle);
+          nextTrackRef.current = track;
+          setNextReady(true);
+          prefetchNextTrack(track);
+        }
+      } else if (msg.event === 'status') {
+        const { state, message, nextReady: nr } = msg.data as unknown as StatusData;
+        console.log('[Radio] Status update:', state, '—', message);
+        setStatus(state);
+        setStatusMessage(message);
+        setNextReady(nr);
+      } else if (msg.event === 'progress') {
+        const { stage, message } = msg.data as unknown as ProgressData;
+        console.log(`[Radio] Progress [${stage}]: ${message}`);
+        setActivityLog((prev) => [
+          ...prev,
+          { id: activityIdRef.current++, stage, message },
+        ]);
+      } else if (msg.event === 'error') {
+        const { message } = msg.data as unknown as ErrorData;
+        console.error('[Radio] Error from server:', message);
+        setErrorMessage(message);
+        setStatus('stopped');
+      }
+    };
+
+    ws.onclose = (event: CloseEvent) => {
+      console.log('[WS] Connection closed — code:', event.code, 'reason:', event.reason || '(none)');
+      // Guard: only the *current* socket may trigger a reconnect.
+      // Without this check, React StrictMode's double-mount causes a stale
+      // socket to reconnect after the new socket is already open, resulting
+      // in two simultaneous connections and duplicate messages.
+      if (isActiveRef.current && wsRef.current === ws) {
+        const delay = reconnectDelay.current;
+        console.log(`[WS] Reconnecting in ${delay}ms...`);
+        reconnectTimer.current = setTimeout(() => {
+          reconnectDelay.current = Math.min(delay * 2, RECONNECT_MAX_MS);
+          connectWebSocket();
+        }, delay);
+      }
+    };
+
+    ws.onerror = () => {
+      // onclose fires right after onerror; reconnect logic lives there
+      console.error('[WS] Socket error — waiting for onclose to trigger reconnect');
+    };
+  }, [playTrack, prefetchNextTrack]);
+
+  // Mount: start WS; unmount: tear down
+  useEffect(() => {
+    isActiveRef.current = true;
+    connectWebSocket();
+    return () => {
+      console.log('[WS] Cleaning up WebSocket on unmount');
+      isActiveRef.current = false;
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      wsRef.current?.close();
+    };
+  }, [connectWebSocket]);
+
+  // Attach audio element ended handler every render (audioRef might change)
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.addEventListener('ended', handleTrackEnded);
+    return () => audio.removeEventListener('ended', handleTrackEnded);
+  }, [handleTrackEnded]);
+
+  // ------------------------------------------------------------------ //
+  // Public API
+  // ------------------------------------------------------------------ //
+
+  const start = useCallback(async (genres: string[], keywords: string[]) => {
+    console.log('[Radio] Starting — genres:', genres, 'keywords:', keywords);
+    nextTrackRef.current = null;
+    clearPreloadBlob();
+    clearActiveBlob();
+    setNextReady(false);
+    setErrorMessage(null);
+    setActivityLog([]);
+    setStatus('generating');
+    setStatusMessage('Starting radio...');
+    setProgress(0);
+
+    try {
+      const res = await fetch('/api/radio/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ genres, keywords }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      console.log('[Radio] Start request accepted by server');
+    } catch (err) {
+      console.error('[Radio] Failed to start:', err);
+      setStatus('idle');
+      setErrorMessage(`Failed to start: ${String(err)}`);
+    }
+  }, [clearPreloadBlob, clearActiveBlob]);
+
+  const stop = useCallback(async () => {
+    console.log('[Radio] Stop requested');
+    audioRef.current?.pause();
+    nextTrackRef.current = null;
+    clearPreloadBlob();
+    clearActiveBlob();
+    setNextReady(false);
+    setStatus('stopped');
+    setProgress(0);
+
+    try {
+      await fetch('/api/radio/stop', { method: 'POST' });
+      console.log('[Radio] Stop confirmed by server');
+    } catch (err) {
+      console.error('[Radio] Stop request failed:', err);
+    }
+  }, [clearPreloadBlob, clearActiveBlob]);
+
+  const rewind = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !currentTrack) {
+      console.warn('[Audio] Rewind ignored — no track loaded');
+      return;
+    }
+    console.log('[Audio] Rewinding to beginning:', currentTrack.songTitle);
+    audio.currentTime = 0;
+    setProgress(0);
+    audio.play().catch((err) => {
+      console.error('[Audio] Play after rewind failed:', err);
+    });
+  }, [currentTrack]);
+
+  return {
+    status,
+    currentTrack,
+    nextReady,
+    statusMessage,
+    errorMessage,
+    activityLog,
+    start,
+    stop,
+    rewind,
+    audioRef,
+    progress,
+  };
+}

@@ -1,0 +1,19 @@
+# Python
+backend/.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Logs
+/tmp/generative-radio-*.log
+
+# macOS
+.DS_Store
+
+# Editor
+.cursor/
+*.swp
