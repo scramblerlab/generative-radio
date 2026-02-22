@@ -317,6 +317,20 @@ export function useRadio(): UseRadioReturn {
     setStatusMessage('Starting radio...');
     setProgress(0);
 
+    // iOS WebKit (Safari and Chrome-on-iOS) requires audio.play() to be called
+    // synchronously within a user gesture handler. We unlock the element here —
+    // before any await — so that later play() calls from WebSocket callbacks are
+    // permitted for the rest of the session. This is a silent no-op on desktop.
+    const audioEl = audioRef.current;
+    if (audioEl) {
+      audioEl.muted = true;
+      audioEl.play().catch(() => {}); // synchronous call unlocks the element on iOS
+      audioEl.pause();
+      audioEl.muted = false;
+      audioEl.load();
+      console.log('[Audio] iOS unlock: silent play/pause fired');
+    }
+
     try {
       const res = await fetch('/api/radio/start', {
         method: 'POST',
