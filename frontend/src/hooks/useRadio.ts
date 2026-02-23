@@ -11,6 +11,8 @@ import {
   ProgressData,
   ListenerCountData,
   RoleAssignedData,
+  ViewerInfo,
+  ViewerListData,
 } from '../types';
 
 export interface UseRadioReturn {
@@ -23,6 +25,7 @@ export interface UseRadioReturn {
   activityLog: ActivityEntry[];
   listenerCount: number;
   audioBlocked: boolean;
+  viewers: ViewerInfo[];
   start: (genres: string[], keywords: string[], language: string) => Promise<void>;
   stop: () => Promise<void>;
   rewind: () => void;
@@ -46,6 +49,7 @@ export function useRadio(): UseRadioReturn {
   const [progress, setProgress] = useState(0);
   const [listenerCount, setListenerCount] = useState(0);
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const [viewers, setViewers] = useState<ViewerInfo[]>([]);
   const activityIdRef = useRef(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -277,6 +281,10 @@ export function useRadio(): UseRadioReturn {
         const { count } = msg.data as unknown as ListenerCountData;
         console.log('[Radio] Listener count:', count);
         setListenerCount(count);
+      } else if (msg.event === 'viewer_list') {
+        const { viewers: vl } = msg.data as unknown as ViewerListData;
+        console.log('[Radio] Viewer list updated:', vl.length, 'viewer(s)');
+        setViewers(vl);
       } else if (msg.event === 'error') {
         const { message } = msg.data as unknown as ErrorData;
         console.error('[Radio] Error from server:', message);
@@ -411,6 +419,7 @@ export function useRadio(): UseRadioReturn {
     activityLog,
     listenerCount,
     audioBlocked,
+    viewers,
     start,
     stop,
     rewind,

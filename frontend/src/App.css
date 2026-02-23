@@ -510,6 +510,74 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   opacity: 0.7;
 }
 
+/* Controller badge */
+.player__controller-badge {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  margin-bottom: 16px;
+  text-transform: uppercase;
+}
+
+/* Invite text */
+.player__invite-text {
+  margin-top: 20px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* Viewer list */
+.player__viewer-list {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.player__viewer-list-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 4px;
+}
+
+.player__viewer-empty {
+  font-size: 12px;
+  color: var(--border-2);
+}
+
+.player__viewer-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.player__viewer-ip {
+  font-family: ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+  color: var(--text-dim);
+}
+
+.player__viewer-since {
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
 /* Error */
 .player__error {
   margin-top: 20px;
