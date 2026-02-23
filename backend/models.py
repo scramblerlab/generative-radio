@@ -43,6 +43,7 @@ class TrackInfo(BaseModel):
 class RadioStartRequest(BaseModel):
     genres: list[str]
     keywords: list[str] = []
+    language: str = "en"  # ISO 639-1 code, or "instrumental" for no-vocal tracks
 
 
 class WSMessage(BaseModel):

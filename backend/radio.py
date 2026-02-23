@@ -8,7 +8,7 @@ from fastapi import WebSocket
 from models import RadioState, TrackInfo, WSMessage, SongPrompt
 from llm import OllamaClient
 from acestep_client import ACEStepClient
-from config import mem_snapshot
+from config import mem_snapshot, get_progressive_duration
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ class RadioOrchestrator:
         self.state: RadioState = RadioState.IDLE
         self.genres: list[str] = []
         self.keywords: list[str] = []
+        self.language: str = "en"             # ISO 639-1 code or "instrumental"
         self.history: list[str] = []          # Song titles played this session
 
         # Track management
@@ -36,6 +37,11 @@ class RadioOrchestrator:
         self._track_ended_event = asyncio.Event()
         self._next_track_ready_event = asyncio.Event()
 
+        # Debounce: ignore duplicate track_ended signals within this window.
+        # With N listeners each firing track_ended simultaneously, only the
+        # first signal within _TRACK_ENDED_DEBOUNCE_S seconds is accepted.
+        self._last_track_ended_at: float = 0.0
+
         # WebSocket connections
         self._ws_connections: list[WebSocket] = []
 
@@ -46,17 +52,19 @@ class RadioOrchestrator:
     def add_ws(self, ws: WebSocket) -> None:
         self._ws_connections.append(ws)
         logger.info(f"[radio] WS connected — total connections: {len(self._ws_connections)}")
+        asyncio.create_task(self._broadcast_listener_count())
 
     def remove_ws(self, ws: WebSocket) -> None:
         if ws in self._ws_connections:
             self._ws_connections.remove(ws)
         logger.info(f"[radio] WS disconnected — total connections: {len(self._ws_connections)}")
+        asyncio.create_task(self._broadcast_listener_count())
 
     # ------------------------------------------------------------------ #
     # Public control methods
     # ------------------------------------------------------------------ #
 
-    async def start(self, genres: list[str], keywords: list[str]) -> None:
+    async def start(self, genres: list[str], keywords: list[str], language: str = "en") -> None:
         """Start a new radio session, stopping any existing one first."""
         if self._task and not self._task.done():
             logger.info("[radio] Stopping existing session before starting new one")
@@ -64,14 +72,16 @@ class RadioOrchestrator:
 
         self.genres = genres
         self.keywords = keywords
+        self.language = language
         self.history = []
         self.next_track = None
         self._stop_event.clear()
         self._track_ended_event.clear()
         self._next_track_ready_event.clear()
         self.audio_cache.clear()
+        self._last_track_ended_at = 0.0  # Reset debounce for fresh session
 
-        logger.info(f"[radio] Starting session — genres: {genres}, keywords: {keywords}")
+        logger.info(f"[radio] Starting session — genres: {genres}, keywords: {keywords}, language: {language}")
         self._task = asyncio.create_task(self._radio_loop(), name="radio-loop")
 
     async def stop(self) -> None:
@@ -102,8 +112,22 @@ class RadioOrchestrator:
         self._track_ended_event.set()
 
     async def on_track_ended(self) -> None:
-        """Called when the frontend reports the current track has finished playing."""
-        logger.info("[radio] Track-ended signal received from client")
+        """Called when the frontend reports the current track has finished playing.
+
+        With N simultaneous listeners each sending track_ended, only the first
+        signal within _TRACK_ENDED_DEBOUNCE_S seconds is honoured; the rest are
+        silently dropped to prevent N-1 spurious track advances.
+        """
+        _DEBOUNCE_S = 5.0
+        now = asyncio.get_event_loop().time()
+        if now - self._last_track_ended_at < _DEBOUNCE_S:
+            logger.info(
+                "[radio] track_ended debounced "
+                f"({now - self._last_track_ended_at:.2f}s since last) — ignoring duplicate"
+            )
+            return
+        self._last_track_ended_at = now
+        logger.info("[radio] Track-ended signal accepted — advancing to next track")
         self._track_ended_event.set()
 
     # ------------------------------------------------------------------ #
@@ -273,9 +297,11 @@ class RadioOrchestrator:
     async def _generate_track(self) -> TrackInfo:
         """LLM → ACE-Step → audio cache. Returns a fully ready TrackInfo."""
         short_id = str(uuid.uuid4())[:8]
+        track_index = len(self.history)  # 0-based; history grows after each completed track
+        target_duration = get_progressive_duration(track_index)
         logger.info(
             f"[radio] [{short_id}] Starting track generation "
-            f"(session history: {len(self.history)} songs)"
+            f"(session history: {track_index} songs, target duration: {target_duration}s)"
         )
 
         # Step 1: LLM generates a structured song prompt
@@ -284,7 +310,8 @@ class RadioOrchestrator:
         logger.info(f"[radio] [{short_id}] Calling LLM for song prompt...")
         t_llm = time.monotonic()
         song_prompt: SongPrompt = await self.llm.generate_prompt(
-            self.genres, self.keywords, self.history
+            self.genres, self.keywords, self.history,
+            duration=target_duration, language=self.language,
         )
         logger.info(
             f"[radio] [{short_id}] LLM done in {time.monotonic() - t_llm:.1f}s — "
@@ -325,7 +352,7 @@ class RadioOrchestrator:
 
         _progress_task = asyncio.create_task(_emit_acestep_progress())
         try:
-            audio_bytes, _metadata = await self.acestep.generate_song(song_prompt)
+            audio_bytes, _metadata = await self.acestep.generate_song(song_prompt, vocal_language=self.language)
         finally:
             _progress_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -405,6 +432,11 @@ class RadioOrchestrator:
         await self.broadcast(
             WSMessage(event="progress", data={"stage": stage, "message": message, **(data or {})})
         )
+
+    async def _broadcast_listener_count(self) -> None:
+        count = len(self._ws_connections)
+        logger.debug(f"[radio] Listener count: {count}")
+        await self.broadcast(WSMessage(event="listener_count", data={"count": count}))
 
     async def _broadcast_error(self, message: str) -> None:
         logger.error(f"[radio] Error broadcast: {message}")

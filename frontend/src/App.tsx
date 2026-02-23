@@ -10,9 +10,9 @@ export default function App() {
   const [view, setView] = useState<View>('selector');
   const radio = useRadio();
 
-  const handleStart = async (genres: string[], keywords: string[]) => {
+  const handleStart = async (genres: string[], keywords: string[], language: string) => {
     setView('player');
-    await radio.start(genres, keywords);
+    await radio.start(genres, keywords, language);
   };
 
   const handleStop = async () => {
@@ -42,6 +42,7 @@ export default function App() {
             errorMessage={radio.errorMessage}
             activityLog={radio.activityLog}
             progress={radio.progress}
+            listenerCount={radio.listenerCount}
             onStop={handleStop}
             onRewind={radio.rewind}
             onBack={handleBack}

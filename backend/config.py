@@ -12,9 +12,17 @@ OLLAMA_MODEL_NAME = "qwen3:8b"
 
 # Audio duration tiers (unified memory in GB → max song duration in seconds).
 # See docs/acestep-memory-vs-duration.md for the research behind these numbers.
-DURATION_THRESHOLD_GB = 48  # machines with ≥48 GB get longer songs
-DURATION_DEFAULT_S = 60     # safe on all machines (MLX VAE uses ~9.7 GB)
-DURATION_LARGE_S = 180      # safe on ≥48 GB machines (~33 GB MLX VAE buffer)
+DURATION_SMALL_THRESHOLD_GB = 32  # ≤32 GB → short debug songs
+DURATION_THRESHOLD_GB = 48        # ≥48 GB → full-length progressive songs
+DURATION_SMALL_S = 30             # fast iteration on ≤24 GB dev machines
+DURATION_DEFAULT_S = 60           # standard on 25–47 GB machines
+DURATION_LARGE_S = 180            # safe on ≥48 GB machines (~33 GB MLX VAE buffer)
+
+# Progressive duration ramp for large-memory machines (track index → seconds):
+#   Track 0 (first):  60 s — quick start
+#   Track 1 (second): 120 s — medium
+#   Track 2+ (third+): 180 s — full length
+_PROGRESSIVE_DURATIONS = [DURATION_DEFAULT_S, 120, DURATION_LARGE_S]
 
 
 def get_unified_memory_gb() -> int:
@@ -70,10 +78,14 @@ def select_max_duration() -> int:
         except ValueError:
             logger.warning(f"[config] Invalid MAX_DURATION_S env value: {env_override!r}. Using auto-detection.")
 
-    duration = DURATION_LARGE_S if _MEMORY_GB >= DURATION_THRESHOLD_GB else DURATION_DEFAULT_S
+    if _MEMORY_GB <= DURATION_SMALL_THRESHOLD_GB:
+        duration = DURATION_SMALL_S
+    elif _MEMORY_GB >= DURATION_THRESHOLD_GB:
+        duration = DURATION_LARGE_S
+    else:
+        duration = DURATION_DEFAULT_S
     logger.info(
-        f"[config] Detected {_MEMORY_GB}GB unified memory "
-        f"(threshold: {DURATION_THRESHOLD_GB}GB) → max audio duration: {duration}s"
+        f"[config] Detected {_MEMORY_GB}GB unified memory → max audio duration: {duration}s"
     )
     return duration
 
@@ -81,6 +93,24 @@ def select_max_duration() -> int:
 # Resolved once at process startup — imported as constants by other modules.
 OLLAMA_MODEL: str = select_ollama_model()
 MAX_DURATION_S: int = select_max_duration()
+
+
+def get_progressive_duration(track_index: int) -> int:
+    """Return the target audio duration (seconds) for a 0-based track index.
+
+    On ≥48 GB machines the duration ramps up so the first track starts quickly:
+      - Track 0: 60 s
+      - Track 1: 120 s
+      - Track 2+: 180 s
+
+    On <48 GB machines every track uses the safe default (60 s).
+    """
+    if _MEMORY_GB <= DURATION_SMALL_THRESHOLD_GB:
+        return DURATION_SMALL_S
+    if _MEMORY_GB < DURATION_THRESHOLD_GB:
+        return DURATION_DEFAULT_S
+    idx = min(track_index, len(_PROGRESSIVE_DURATIONS) - 1)
+    return _PROGRESSIVE_DURATIONS[idx]
 
 
 def mem_snapshot() -> str:

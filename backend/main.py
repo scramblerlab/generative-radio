@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from config import OLLAMA_MODEL
-from genres import GENRES, KEYWORDS
+from genres import GENRES, KEYWORDS, LANGUAGES
 from llm import OllamaClient
 from acestep_client import ACEStepClient
 from radio import RadioOrchestrator
@@ -72,16 +72,16 @@ app.add_middleware(
 async def get_genres():
     """Return available genre and keyword lists for the frontend selector."""
     logger.debug("[main] GET /api/genres")
-    return {"genres": GENRES, "keywords": KEYWORDS}
+    return {"genres": GENRES, "keywords": KEYWORDS, "languages": LANGUAGES}
 
 
 @app.post("/api/radio/start")
 async def start_radio(req: RadioStartRequest):
     """Start the radio session with selected genres and keywords."""
-    logger.info(f"[main] POST /api/radio/start — genres: {req.genres}, keywords: {req.keywords}")
+    logger.info(f"[main] POST /api/radio/start — genres: {req.genres}, keywords: {req.keywords}, language: {req.language}")
     if not req.genres:
         raise HTTPException(status_code=400, detail="At least one genre is required")
-    await radio.start(req.genres, req.keywords)
+    await radio.start(req.genres, req.keywords, language=req.language)
     return {"status": "started"}
 
 
@@ -124,6 +124,7 @@ async def get_status():
         "nextReady": radio.next_track is not None,
         "historyCount": len(radio.history),
         "model": OLLAMA_MODEL,
+        "listenerCount": len(radio._ws_connections),
     }
 
 

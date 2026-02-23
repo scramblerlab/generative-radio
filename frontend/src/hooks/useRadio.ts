@@ -8,6 +8,7 @@ import {
   ErrorData,
   ActivityEntry,
   ProgressData,
+  ListenerCountData,
 } from '../types';
 
 export interface UseRadioReturn {
@@ -17,7 +18,8 @@ export interface UseRadioReturn {
   statusMessage: string;
   errorMessage: string | null;
   activityLog: ActivityEntry[];
-  start: (genres: string[], keywords: string[]) => Promise<void>;
+  listenerCount: number;
+  start: (genres: string[], keywords: string[], language: string) => Promise<void>;
   stop: () => Promise<void>;
   rewind: () => void;
   audioRef: RefObject<HTMLAudioElement | null>;
@@ -36,6 +38,7 @@ export function useRadio(): UseRadioReturn {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [progress, setProgress] = useState(0);
+  const [listenerCount, setListenerCount] = useState(0);
   const activityIdRef = useRef(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -251,6 +254,10 @@ export function useRadio(): UseRadioReturn {
           ...prev,
           { id: activityIdRef.current++, stage, message },
         ]);
+      } else if (msg.event === 'listener_count') {
+        const { count } = msg.data as unknown as ListenerCountData;
+        console.log('[Radio] Listener count:', count);
+        setListenerCount(count);
       } else if (msg.event === 'error') {
         const { message } = msg.data as unknown as ErrorData;
         console.error('[Radio] Error from server:', message);
@@ -305,8 +312,8 @@ export function useRadio(): UseRadioReturn {
   // Public API
   // ------------------------------------------------------------------ //
 
-  const start = useCallback(async (genres: string[], keywords: string[]) => {
-    console.log('[Radio] Starting — genres:', genres, 'keywords:', keywords);
+  const start = useCallback(async (genres: string[], keywords: string[], language: string = 'en') => {
+    console.log('[Radio] Starting — genres:', genres, 'keywords:', keywords, 'language:', language);
     nextTrackRef.current = null;
     clearPreloadBlob();
     clearActiveBlob();
@@ -335,7 +342,7 @@ export function useRadio(): UseRadioReturn {
       const res = await fetch('/api/radio/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ genres, keywords }),
+        body: JSON.stringify({ genres, keywords, language }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       console.log('[Radio] Start request accepted by server');
@@ -385,6 +392,7 @@ export function useRadio(): UseRadioReturn {
     statusMessage,
     errorMessage,
     activityLog,
+    listenerCount,
     start,
     stop,
     rewind,
