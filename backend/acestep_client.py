@@ -34,14 +34,21 @@ class ACEStepClient:
             logger.error(f"[acestep] Health check failed — is ACE-Step running on {self.base_url}? Error: {e}")
             return False
 
-    async def submit_task(self, prompt: SongPrompt) -> str:
-        """POST /release_task — submit a music generation job, return task_id."""
+    async def submit_task(self, prompt: SongPrompt, vocal_language: str = "en") -> str:
+        """POST /release_task — submit a music generation job, return task_id.
+
+        vocal_language: ISO 639-1 code (e.g. "en", "ja", "ko"), or "unknown" for
+        auto-detection / instrumental tracks.
+        """
+        # "instrumental" is our internal sentinel; ACE-Step uses "unknown"
+        ace_language = "unknown" if vocal_language == "instrumental" else vocal_language
         payload = {
             "prompt": prompt.tags,
             "lyrics": prompt.lyrics,
             "bpm": prompt.bpm,
             "key_scale": prompt.key_scale,
             "audio_duration": prompt.duration,
+            "vocal_language": ace_language,
             "thinking": True,       # ACE-Step's internal LM-DiT enhanced quality mode
             "batch_size": 1,
             "audio_format": "mp3",
@@ -153,15 +160,15 @@ class ACEStepClient:
         await self.client.aclose()
         logger.info("[acestep] HTTP client closed")
 
-    async def generate_song(self, prompt: SongPrompt) -> tuple[bytes, dict]:
+    async def generate_song(self, prompt: SongPrompt, vocal_language: str = "en") -> tuple[bytes, dict]:
         """Full pipeline: submit → poll → download.
 
         Returns (audio_bytes, result_metadata).
         """
-        logger.info(f"[acestep] ── Starting pipeline for '{prompt.song_title}' ──")
+        logger.info(f"[acestep] ── Starting pipeline for '{prompt.song_title}' (lang: {vocal_language}) ──")
         t0 = time.monotonic()
 
-        task_id = await self.submit_task(prompt)
+        task_id = await self.submit_task(prompt, vocal_language=vocal_language)
         result = await self.poll_task(task_id, song_title=prompt.song_title)
 
         # Parse the audio path from the file URL field

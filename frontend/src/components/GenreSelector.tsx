@@ -1,25 +1,28 @@
 import { useState, useEffect } from 'react';
-import { Genre, Keyword } from '../types';
+import { Genre, Keyword, Language } from '../types';
 
 interface GenreSelectorProps {
-  onStart: (genres: string[], keywords: string[]) => void;
+  onStart: (genres: string[], keywords: string[], language: string) => void;
 }
 
 export function GenreSelector({ onStart }: GenreSelectorProps) {
   const [genres, setGenres] = useState<Genre[]>([]);
   const [keywords, setKeywords] = useState<Keyword[]>([]);
+  const [languages, setLanguages] = useState<Language[]>([]);
   const [selectedGenres, setSelectedGenres] = useState<Set<string>>(new Set());
   const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(new Set());
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     console.log('[GenreSelector] Fetching genres and keywords from /api/genres');
     fetch('/api/genres')
       .then((r) => r.json())
-      .then((data: { genres: Genre[]; keywords: Keyword[] }) => {
-        console.log('[GenreSelector] Loaded', data.genres.length, 'genres,', data.keywords.length, 'keywords');
+      .then((data: { genres: Genre[]; keywords: Keyword[]; languages: Language[] }) => {
+        console.log('[GenreSelector] Loaded', data.genres.length, 'genres,', data.keywords.length, 'keywords,', data.languages.length, 'languages');
         setGenres(data.genres);
         setKeywords(data.keywords);
+        setLanguages(data.languages);
         setLoading(false);
       })
       .catch((err) => {
@@ -45,11 +48,8 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
   const toggleKeyword = (id: string) => {
     setSelectedKeywords((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -57,8 +57,8 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
   const handleStart = () => {
     const genreList = [...selectedGenres];
     const keywordList = [...selectedKeywords];
-    console.log('[GenreSelector] Starting radio with:', genreList, keywordList);
-    onStart(genreList, keywordList);
+    console.log('[GenreSelector] Starting radio with:', genreList, keywordList, selectedLanguage);
+    onStart(genreList, keywordList, selectedLanguage);
   };
 
   if (loading) {
@@ -111,6 +111,29 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
         </div>
       </section>
 
+      <section className="selector__section">
+        <h2 className="selector__section-title">Language</h2>
+        <div className="language-row">
+          {languages.map((lang) => (
+            <button
+              key={lang.code}
+              className={[
+                'language-chip',
+                selectedLanguage === lang.code ? 'language-chip--selected' : '',
+                lang.code === 'instrumental' ? 'language-chip--instrumental' : '',
+              ].join(' ').trim()}
+              onClick={() => {
+                console.log('[GenreSelector] Language selected:', lang.code);
+                setSelectedLanguage(lang.code);
+              }}
+              aria-pressed={selectedLanguage === lang.code}
+            >
+              {lang.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
       <div className="selector__footer">
         {selectedGenres.size > 0 && (
           <p className="selector__summary">
@@ -127,6 +150,10 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
                   .join(', ')}
               </span>
             )}
+            {' · '}
+            <span className="selector__summary-language">
+              {languages.find((l) => l.code === selectedLanguage)?.label ?? selectedLanguage}
+            </span>
           </p>
         )}
         <button

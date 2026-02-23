@@ -44,6 +44,7 @@ interface RadioPlayerProps {
   errorMessage: string | null;
   activityLog: ActivityEntry[];
   progress: number; // 0–1
+  listenerCount: number;
   onStop: () => void;
   onRewind: () => void;
   onBack: () => void;
@@ -67,6 +68,7 @@ export function RadioPlayer({
   errorMessage,
   activityLog,
   progress,
+  listenerCount,
   onStop,
   onRewind,
   onBack,
@@ -171,7 +173,7 @@ export function RadioPlayer({
         )}
       </div>
 
-      <StatusBar status={status} message={statusMessage} nextReady={nextReady} />
+      <StatusBar status={status} message={statusMessage} nextReady={nextReady} listenerCount={listenerCount} />
     </div>
   );
 }

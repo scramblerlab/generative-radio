@@ -30,3 +30,18 @@ KEYWORDS = [
     {"id": "psychedelic", "label": "Psychedelic"},
     {"id": "cinematic",   "label": "Cinematic"},
 ]
+
+LANGUAGES = [
+    {"code": "en",           "label": "English"},
+    {"code": "es",           "label": "Español"},
+    {"code": "fr",           "label": "Français"},
+    {"code": "de",           "label": "Deutsch"},
+    {"code": "it",           "label": "Italiano"},
+    {"code": "zh",           "label": "中文"},
+    {"code": "el",           "label": "Ελληνικά"},
+    {"code": "fi",           "label": "Suomi"},
+    {"code": "sv",           "label": "Svenska"},
+    {"code": "ja",           "label": "日本語"},
+    {"code": "ko",           "label": "한국어"},
+    {"code": "instrumental", "label": "No Vocal"},
+]

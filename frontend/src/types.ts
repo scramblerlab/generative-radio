@@ -29,10 +29,19 @@ export interface Keyword {
   label: string;
 }
 
+export interface Language {
+  code: string;   // ISO 639-1 code, or "instrumental"
+  label: string;  // Display name (may be in native script)
+}
+
 // WebSocket message shape from the server
 export interface WSMessage {
-  event: 'track_ready' | 'status' | 'error' | 'progress';
+  event: 'track_ready' | 'status' | 'error' | 'progress' | 'listener_count';
   data: Record<string, unknown>;
+}
+
+export interface ListenerCountData {
+  count: number;
 }
 
 // Payload shapes for each event

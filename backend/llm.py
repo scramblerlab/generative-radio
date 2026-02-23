@@ -9,6 +9,21 @@ from config import OLLAMA_MODEL, MAX_DURATION_S
 
 logger = logging.getLogger(__name__)
 
+# Human-readable names injected into the LLM system prompt
+_LANGUAGE_NAMES: dict[str, str] = {
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "zh": "Chinese (Mandarin)",
+    "el": "Greek",
+    "fi": "Finnish",
+    "sv": "Swedish",
+    "ja": "Japanese",
+    "ko": "Korean",
+}
+
 
 class OllamaClient:
     def __init__(self, model: str | None = None):
@@ -20,6 +35,8 @@ class OllamaClient:
         genres: list[str],
         keywords: list[str],
         history: list[str],
+        duration: int | None = None,
+        language: str = "en",
     ) -> SongPrompt:
         """Call Ollama to generate a structured SongPrompt.
 
@@ -27,10 +44,13 @@ class OllamaClient:
         Thinking mode is disabled (think=False) — not needed for JSON generation.
         """
         model = os.environ.get("OLLAMA_MODEL", self.model)
+        target_duration = duration if duration is not None else MAX_DURATION_S
+        is_instrumental = language == "instrumental"
         logger.info(
             f"[llm] Generating prompt — model: {model}, "
             f"genres: {genres}, keywords: {keywords}, "
-            f"history_length: {len(history)}"
+            f"history_length: {len(history)}, target_duration: {target_duration}s, "
+            f"language: {language}"
         )
 
         history_section = ""
@@ -41,6 +61,19 @@ class OllamaClient:
                 + "\n".join(f"  - {title}" for title in recent)
             )
 
+        if is_instrumental:
+            lyrics_rule = (
+                "- INSTRUMENTAL TRACK — there are no vocals. "
+                "Set the lyrics field to an empty string \"\"."
+            )
+        else:
+            lang_name = _LANGUAGE_NAMES.get(language, language)
+            lyrics_rule = (
+                f"- Write all lyrics in {lang_name}. "
+                f"Every word of every lyric section must be in {lang_name}. "
+                "Do not mix in English or any other language."
+            )
+
         system_prompt = f"""You are a creative AI radio DJ. Your job is to generate unique, \
 original song prompts for an AI music generator.
 
@@ -49,14 +82,15 @@ SELECTED MOODS / KEYWORDS: {', '.join(keywords) if keywords else 'None specified
 {history_section}
 
 RULES:
-- Write original lyrics (2–4 sections using [verse], [chorus], [bridge] markers)
+- {lyrics_rule}
+- Write {'no lyrics (instrumental)' if is_instrumental else '2–4 lyric sections using [verse], [chorus], [bridge] markers'}
 - The "tags" field must be a comma-separated list of musical style descriptors \
-that ACE-Step understands: sub-genre, instruments, mood, tempo feel, vocal style, production style, etc.
+that ACE-Step understands: sub-genre, instruments, mood, tempo feel, {'no vocals, ' if is_instrumental else ''}vocal style, production style, etc.
 - Vary the sub-genre, tempo, key, mood, and lyric themes between songs
-- Lyrics should be creative and evocative, not generic or clichéd
-- Keep lyrics concise: 4–8 lines per section
+- {'Lyrics are empty for instrumental tracks' if is_instrumental else 'Lyrics should be creative and evocative, not generic or clichéd'}
+- {'Skip this rule' if is_instrumental else 'Keep lyrics concise: 4–8 lines per section'}
 - BPM must match the genre and mood naturally
-        - Duration must be exactly {MAX_DURATION_S} seconds"""
+- Duration must be exactly {target_duration} seconds"""
 
         t0 = time.monotonic()
         try:
