@@ -45,19 +45,46 @@ class RadioOrchestrator:
         # WebSocket connections
         self._ws_connections: list[WebSocket] = []
 
+        # Role management
+        self._controller_ws: WebSocket | None = None
+        self._pending_promotion: bool = False  # Promote next viewer once prebuffer finishes
+
     # ------------------------------------------------------------------ #
     # WebSocket connection management
     # ------------------------------------------------------------------ #
 
     def add_ws(self, ws: WebSocket) -> None:
         self._ws_connections.append(ws)
-        logger.info(f"[radio] WS connected — total connections: {len(self._ws_connections)}")
+        if self._controller_ws is None:
+            # First connection (or re-fill after controller left) → controller
+            self._controller_ws = ws
+            logger.info(f"[radio] WS connected as CONTROLLER — total: {len(self._ws_connections)}")
+            asyncio.create_task(
+                self._send_to(ws, WSMessage(event="role_assigned", data={"role": "controller"}))
+            )
+        else:
+            # Subsequent connections → viewer; send role + late-join state snapshot
+            logger.info(f"[radio] WS connected as VIEWER — total: {len(self._ws_connections)}")
+            asyncio.create_task(self._send_viewer_snapshot(ws))
         asyncio.create_task(self._broadcast_listener_count())
 
     def remove_ws(self, ws: WebSocket) -> None:
         if ws in self._ws_connections:
             self._ws_connections.remove(ws)
         logger.info(f"[radio] WS disconnected — total connections: {len(self._ws_connections)}")
+
+        if ws == self._controller_ws:
+            self._controller_ws = None
+            logger.info("[radio] Controller disconnected")
+            prebuffer_active = (
+                self._prebuffer_task is not None and not self._prebuffer_task.done()
+            )
+            if prebuffer_active:
+                logger.info("[radio] Background generation in progress — deferring viewer promotion")
+                self._pending_promotion = True
+            else:
+                asyncio.create_task(self._promote_next_controller())
+
         asyncio.create_task(self._broadcast_listener_count())
 
     # ------------------------------------------------------------------ #
@@ -80,6 +107,7 @@ class RadioOrchestrator:
         self._next_track_ready_event.clear()
         self.audio_cache.clear()
         self._last_track_ended_at = 0.0  # Reset debounce for fresh session
+        self._pending_promotion = False   # Clear any stale promotion from previous session
 
         logger.info(f"[radio] Starting session — genres: {genres}, keywords: {keywords}, language: {language}")
         self._task = asyncio.create_task(self._radio_loop(), name="radio-loop")
@@ -131,6 +159,47 @@ class RadioOrchestrator:
         self._track_ended_event.set()
 
     # ------------------------------------------------------------------ #
+    # WebSocket-gated control (called from WS handler in main.py)
+    # ------------------------------------------------------------------ #
+
+    async def start_from_ws(
+        self, ws: WebSocket, genres: list[str], keywords: list[str], language: str = "en"
+    ) -> None:
+        """Start the radio session — authorised only for the current controller."""
+        if ws != self._controller_ws:
+            logger.warning("[radio] start_from_ws rejected — sender is not the controller")
+            await self._send_to(
+                ws, WSMessage(event="error", data={"message": "Only the host can start the radio"})
+            )
+            return
+        if not genres:
+            await self._send_to(
+                ws, WSMessage(event="error", data={"message": "At least one genre is required"})
+            )
+            return
+        await self.start(genres, keywords, language)
+
+    async def stop_from_ws(self, ws: WebSocket) -> None:
+        """Stop the radio session — authorised only for the current controller."""
+        if ws != self._controller_ws:
+            logger.warning("[radio] stop_from_ws rejected — sender is not the controller")
+            await self._send_to(
+                ws, WSMessage(event="error", data={"message": "Only the host can stop the radio"})
+            )
+            return
+        await self.stop()
+
+    async def skip_from_ws(self, ws: WebSocket) -> None:
+        """Skip the current track — authorised only for the current controller."""
+        if ws != self._controller_ws:
+            logger.warning("[radio] skip_from_ws rejected — sender is not the controller")
+            await self._send_to(
+                ws, WSMessage(event="error", data={"message": "Only the host can skip tracks"})
+            )
+            return
+        await self.skip()
+
+    # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
 
@@ -146,6 +215,87 @@ class RadioOrchestrator:
         self._cancel_prebuffer()
         self._prebuffer_task = asyncio.create_task(
             self._generate_and_buffer_next(), name="radio-prebuffer"
+        )
+
+    async def _send_to(self, ws: WebSocket, message: WSMessage) -> None:
+        """Unicast a message to a single WebSocket client."""
+        try:
+            await ws.send_text(message.model_dump_json())
+        except Exception as e:
+            logger.warning(f"[radio] Failed to unicast to WS: {e}")
+            self.remove_ws(ws)
+
+    async def _send_viewer_snapshot(self, ws: WebSocket) -> None:
+        """Unicast role_assigned:viewer + current session state to a newly connected viewer.
+
+        This ensures late-joining clients see the current track immediately without
+        waiting for the next broadcast cycle.
+        """
+        await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "viewer"}))
+
+        # Only send state if a session is actually running
+        if self.state in (RadioState.IDLE, RadioState.STOPPED):
+            return
+
+        if self.current_track:
+            ct = self.current_track
+            await self._send_to(
+                ws,
+                WSMessage(
+                    event="track_ready",
+                    data={
+                        "track": {
+                            "id": ct.id,
+                            "songTitle": ct.song_title,
+                            "tags": ct.tags,
+                            "lyrics": ct.lyrics,
+                            "bpm": ct.bpm,
+                            "keyScale": ct.key_scale,
+                            "duration": ct.duration,
+                            "audioUrl": ct.audio_url,
+                        },
+                        "isNext": False,
+                    },
+                ),
+            )
+
+        if self.state == RadioState.PLAYING:
+            msg = (
+                "Playing — next track ready"
+                if self.next_track
+                else "Playing — generating next track..."
+            )
+        elif self.state == RadioState.GENERATING:
+            msg = "Generating your first track..."
+        elif self.state == RadioState.BUFFERING:
+            msg = "Buffering next track..."
+        else:
+            msg = ""
+
+        await self._send_to(
+            ws,
+            WSMessage(
+                event="status",
+                data={
+                    "state": self.state.value,
+                    "message": msg,
+                    "nextReady": self.next_track is not None,
+                },
+            ),
+        )
+
+    async def _promote_next_controller(self) -> None:
+        """Promote the first waiting viewer to the controller role."""
+        self._pending_promotion = False
+        if not self._ws_connections:
+            logger.info("[radio] No viewers to promote — controller slot is vacant")
+            return
+        new_controller = self._ws_connections[0]
+        self._controller_ws = new_controller
+        logger.info("[radio] Viewer promoted to controller")
+        await self._send_to(
+            new_controller,
+            WSMessage(event="role_assigned", data={"role": "controller"}),
         )
 
     # ------------------------------------------------------------------ #
@@ -283,6 +433,11 @@ class RadioOrchestrator:
             # Notify frontend — it caches this and plays immediately on track_ended
             await self._broadcast_track_ready(track, is_next=True)
             await self._broadcast_status("playing", "Playing — next track ready")
+
+            # Promote any deferred controller now that generation is complete
+            if self._pending_promotion:
+                logger.info("[radio] Promoting deferred viewer to controller (generation complete)")
+                await self._promote_next_controller()
 
         except asyncio.CancelledError:
             logger.info("[radio] Background generation cancelled")
