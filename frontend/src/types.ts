@@ -6,6 +6,8 @@ export type RadioStatus =
   | 'buffering'
   | 'stopped';
 
+export type ClientRole = 'controller' | 'viewer';
+
 export interface Track {
   id: string;
   songTitle: string;
@@ -36,12 +38,16 @@ export interface Language {
 
 // WebSocket message shape from the server
 export interface WSMessage {
-  event: 'track_ready' | 'status' | 'error' | 'progress' | 'listener_count';
+  event: 'track_ready' | 'status' | 'error' | 'progress' | 'listener_count' | 'role_assigned';
   data: Record<string, unknown>;
 }
 
 export interface ListenerCountData {
   count: number;
+}
+
+export interface RoleAssignedData {
+  role: ClientRole;
 }
 
 // Payload shapes for each event

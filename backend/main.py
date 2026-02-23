@@ -9,7 +9,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -18,7 +18,6 @@ from genres import GENRES, KEYWORDS, LANGUAGES
 from llm import OllamaClient
 from acestep_client import ACEStepClient
 from radio import RadioOrchestrator
-from models import RadioStartRequest
 
 logger = logging.getLogger(__name__)
 
@@ -73,32 +72,6 @@ async def get_genres():
     """Return available genre and keyword lists for the frontend selector."""
     logger.debug("[main] GET /api/genres")
     return {"genres": GENRES, "keywords": KEYWORDS, "languages": LANGUAGES}
-
-
-@app.post("/api/radio/start")
-async def start_radio(req: RadioStartRequest):
-    """Start the radio session with selected genres and keywords."""
-    logger.info(f"[main] POST /api/radio/start — genres: {req.genres}, keywords: {req.keywords}, language: {req.language}")
-    if not req.genres:
-        raise HTTPException(status_code=400, detail="At least one genre is required")
-    await radio.start(req.genres, req.keywords, language=req.language)
-    return {"status": "started"}
-
-
-@app.post("/api/radio/stop")
-async def stop_radio():
-    """Stop the radio session."""
-    logger.info("[main] POST /api/radio/stop")
-    await radio.stop()
-    return {"status": "stopped"}
-
-
-@app.post("/api/radio/skip")
-async def skip_track():
-    """Skip the current track."""
-    logger.info("[main] POST /api/radio/skip")
-    await radio.skip()
-    return {"status": "skipped"}
 
 
 @app.get("/api/radio/status")
@@ -177,6 +150,18 @@ async def websocket_endpoint(websocket: WebSocket):
 
             if event == "track_ended":
                 await radio.on_track_ended()
+            elif event == "start":
+                event_data = data.get("data", {})
+                await radio.start_from_ws(
+                    websocket,
+                    genres=event_data.get("genres", []),
+                    keywords=event_data.get("keywords", []),
+                    language=event_data.get("language", "en"),
+                )
+            elif event == "stop":
+                await radio.stop_from_ws(websocket)
+            elif event == "skip":
+                await radio.skip_from_ws(websocket)
             else:
                 logger.warning(f"[main] Unknown WS event from client: {event}")
 

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, RefObject } from 'react';
 import {
   Track,
   RadioStatus,
+  ClientRole,
   WSMessage,
   TrackReadyData,
   StatusData,
@@ -9,9 +10,11 @@ import {
   ActivityEntry,
   ProgressData,
   ListenerCountData,
+  RoleAssignedData,
 } from '../types';
 
 export interface UseRadioReturn {
+  role: ClientRole | null;
   status: RadioStatus;
   currentTrack: Track | null;
   nextReady: boolean;
@@ -19,9 +22,11 @@ export interface UseRadioReturn {
   errorMessage: string | null;
   activityLog: ActivityEntry[];
   listenerCount: number;
+  audioBlocked: boolean;
   start: (genres: string[], keywords: string[], language: string) => Promise<void>;
   stop: () => Promise<void>;
   rewind: () => void;
+  unblockAudio: () => void;
   audioRef: RefObject<HTMLAudioElement | null>;
   progress: number; // 0–1
 }
@@ -31,6 +36,7 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 16_000;
 
 export function useRadio(): UseRadioReturn {
+  const [role, setRole] = useState<ClientRole | null>(null);
   const [status, setStatus] = useState<RadioStatus>('idle');
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [nextReady, setNextReady] = useState(false);
@@ -39,6 +45,7 @@ export function useRadio(): UseRadioReturn {
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [progress, setProgress] = useState(0);
   const [listenerCount, setListenerCount] = useState(0);
+  const [audioBlocked, setAudioBlocked] = useState(false);
   const activityIdRef = useRef(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -131,9 +138,17 @@ export function useRadio(): UseRadioReturn {
         activeBlobUrlRef.current = null;
       }
 
-      audio.play().catch((err) => {
-        console.error('[Audio] play() failed:', err);
-      });
+      audio.play()
+        .then(() => setAudioBlocked(false))
+        .catch((err) => {
+          console.error('[Audio] play() failed:', err);
+          // Browsers block autoplay when there has been no prior user gesture.
+          // Surface a "Tap to Listen" button so the viewer can unlock audio manually.
+          if (err instanceof DOMException && err.name === 'NotAllowedError') {
+            console.log('[Audio] Autoplay blocked — user gesture required');
+            setAudioBlocked(true);
+          }
+        });
     }
   }, [clearActiveBlob]);
 
@@ -221,7 +236,11 @@ export function useRadio(): UseRadioReturn {
 
       console.log('[WS] Received event:', msg.event, msg.data);
 
-      if (msg.event === 'track_ready') {
+      if (msg.event === 'role_assigned') {
+        const { role: assignedRole } = msg.data as unknown as RoleAssignedData;
+        console.log('[Radio] Role assigned:', assignedRole);
+        setRole(assignedRole);
+      } else if (msg.event === 'track_ready') {
         const { track, isNext } = msg.data as unknown as TrackReadyData;
 
         if (!isNext) {
@@ -338,20 +357,10 @@ export function useRadio(): UseRadioReturn {
       console.log('[Audio] iOS unlock: silent play/pause fired');
     }
 
-    try {
-      const res = await fetch('/api/radio/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ genres, keywords, language }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      console.log('[Radio] Start request accepted by server');
-    } catch (err) {
-      console.error('[Radio] Failed to start:', err);
-      setStatus('idle');
-      setErrorMessage(`Failed to start: ${String(err)}`);
-    }
-  }, [clearPreloadBlob, clearActiveBlob]);
+    // Send start command over WebSocket. The server validates that this client
+    // is the controller and responds via broadcast events (status, track_ready, error).
+    sendWS({ event: 'start', data: { genres, keywords, language } });
+  }, [clearPreloadBlob, clearActiveBlob, sendWS]);
 
   const stop = useCallback(async () => {
     console.log('[Radio] Stop requested');
@@ -363,13 +372,20 @@ export function useRadio(): UseRadioReturn {
     setStatus('stopped');
     setProgress(0);
 
-    try {
-      await fetch('/api/radio/stop', { method: 'POST' });
-      console.log('[Radio] Stop confirmed by server');
-    } catch (err) {
-      console.error('[Radio] Stop request failed:', err);
-    }
-  }, [clearPreloadBlob, clearActiveBlob]);
+    // Send stop command over WebSocket. Server validates controller role.
+    sendWS({ event: 'stop' });
+  }, [clearPreloadBlob, clearActiveBlob, sendWS]);
+
+  const unblockAudio = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    // Called from a button click, so we are inside a user gesture — play() is allowed.
+    console.log('[Audio] User tapped to listen — resuming from beginning');
+    audio.currentTime = 0;
+    audio.play()
+      .then(() => setAudioBlocked(false))
+      .catch((err) => console.error('[Audio] unblockAudio play() failed:', err));
+  }, []);
 
   const rewind = useCallback(() => {
     const audio = audioRef.current;
@@ -386,6 +402,7 @@ export function useRadio(): UseRadioReturn {
   }, [currentTrack]);
 
   return {
+    role,
     status,
     currentTrack,
     nextReady,
@@ -393,9 +410,11 @@ export function useRadio(): UseRadioReturn {
     errorMessage,
     activityLog,
     listenerCount,
+    audioBlocked,
     start,
     stop,
     rewind,
+    unblockAudio,
     audioRef,
     progress,
   };

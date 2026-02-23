@@ -37,6 +37,7 @@ function ActivityLog({ entries }: { entries: ActivityEntry[] }) {
 }
 
 interface RadioPlayerProps {
+  readonly: boolean;
   track: Track | null;
   status: RadioStatus;
   nextReady: boolean;
@@ -45,9 +46,11 @@ interface RadioPlayerProps {
   activityLog: ActivityEntry[];
   progress: number; // 0–1
   listenerCount: number;
+  audioBlocked: boolean;
   onStop: () => void;
   onRewind: () => void;
   onBack: () => void;
+  onUnblockAudio: () => void;
 }
 
 function Equalizer({ active }: { active: boolean }) {
@@ -61,6 +64,7 @@ function Equalizer({ active }: { active: boolean }) {
 }
 
 export function RadioPlayer({
+  readonly,
   track,
   status,
   nextReady,
@@ -69,25 +73,39 @@ export function RadioPlayer({
   activityLog,
   progress,
   listenerCount,
+  audioBlocked,
   onStop,
   onRewind,
   onBack,
+  onUnblockAudio,
 }: RadioPlayerProps) {
   const isPlaying = status === 'playing';
   const isLoading = status === 'generating' || status === 'buffering' || status === 'connecting';
 
   return (
     <div className="player">
-      <button className="player__back" onClick={onBack} title="Change genres">
-        ← Change genres
-      </button>
+      {readonly ? (
+        <div className="player__viewer-badge">Now Listening</div>
+      ) : (
+        <button className="player__back" onClick={onBack} title="Change genres">
+          ← Change genres
+        </button>
+      )}
 
       <div className="player__card">
         {/* Now Playing */}
         <div className="player__now-playing">
-          <Equalizer active={isPlaying} />
+          <Equalizer active={isPlaying && !audioBlocked} />
 
-          {track ? (
+          {/* Viewer tap-to-listen gate — shown when browser blocked autoplay */}
+          {readonly && audioBlocked && track ? (
+            <button className="player__unblock-btn" onClick={onUnblockAudio}>
+              <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22" aria-hidden="true">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              Tap to Listen
+            </button>
+          ) : track ? (
             <div className="player__track-info">
               <h2 className="player__song-title">{track.songTitle}</h2>
               <p className="player__tags">{track.tags}</p>
@@ -98,14 +116,16 @@ export function RadioPlayer({
           ) : (
             <div className="player__track-info player__track-info--empty">
               <h2 className="player__song-title">
-                {isLoading ? 'Generating...' : 'Ready'}
+                {isLoading ? 'Generating...' : readonly ? 'Waiting for host...' : 'Ready'}
               </h2>
               <p className="player__tags">
                 {status === 'generating'
                   ? 'Your first track is on its way'
                   : status === 'buffering'
                     ? 'Loading next track...'
-                    : 'Select genres to begin'}
+                    : readonly
+                      ? 'The host will start the radio soon'
+                      : 'Select genres to begin'}
               </p>
             </div>
           )}
@@ -124,46 +144,48 @@ export function RadioPlayer({
           <ActivityLog entries={activityLog} />
         )}
 
-        {/* Controls */}
-        <div className="player__controls">
-          {/* Rewind */}
-          <button
-            className="player__icon-btn"
-            onClick={onRewind}
-            aria-label="Rewind to beginning"
-            disabled={!track}
-            title="Restart from beginning"
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M6 6h2v12H6zM17.5 12 9 6v12l8.5-6z" />
-            </svg>
-          </button>
-
-          {/* Play / Stop */}
-          <button
-            className={`player__play-btn ${isPlaying ? 'player__play-btn--active' : ''}`}
-            onClick={onStop}
-            aria-label={isPlaying ? 'Stop radio' : isLoading ? 'Loading...' : 'Start radio'}
-            disabled={isLoading && !track}
-          >
-            {isPlaying ? (
+        {/* Controls — hidden for viewers */}
+        {!readonly && (
+          <div className="player__controls">
+            {/* Rewind */}
+            <button
+              className="player__icon-btn"
+              onClick={onRewind}
+              aria-label="Rewind to beginning"
+              disabled={!track}
+              title="Restart from beginning"
+            >
               <svg viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="6" width="4" height="12" rx="1" />
-                <rect x="14" y="6" width="4" height="12" rx="1" />
+                <path d="M6 6h2v12H6zM17.5 12 9 6v12l8.5-6z" />
               </svg>
-            ) : (
-              <svg viewBox="0 0 24 24" fill="currentColor">
-                <circle cx="12" cy="12" r="8" opacity="0.3" />
-                <path d="M12 4a8 8 0 0 1 8 8" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round">
-                  <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite" />
-                </path>
-              </svg>
-            )}
-          </button>
+            </button>
 
-          {/* Rewind mirror — keeps the play button visually centred */}
-          <div className="player__icon-btn player__icon-btn--spacer" aria-hidden="true" />
-        </div>
+            {/* Play / Stop */}
+            <button
+              className={`player__play-btn ${isPlaying ? 'player__play-btn--active' : ''}`}
+              onClick={onStop}
+              aria-label={isPlaying ? 'Stop radio' : isLoading ? 'Loading...' : 'Start radio'}
+              disabled={isLoading && !track}
+            >
+              {isPlaying ? (
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="6" width="4" height="12" rx="1" />
+                  <rect x="14" y="6" width="4" height="12" rx="1" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx="12" cy="12" r="8" opacity="0.3" />
+                  <path d="M12 4a8 8 0 0 1 8 8" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round">
+                    <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite" />
+                  </path>
+                </svg>
+              )}
+            </button>
+
+            {/* Rewind mirror — keeps the play button visually centred */}
+            <div className="player__icon-btn player__icon-btn--spacer" aria-hidden="true" />
+          </div>
+        )}
 
         {/* Error */}
         {errorMessage && (
