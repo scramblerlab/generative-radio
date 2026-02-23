@@ -82,6 +82,7 @@ export default function App() {
               progress={radio.progress}
               listenerCount={radio.listenerCount}
               audioBlocked={radio.audioBlocked}
+              viewers={radio.viewers}
               onStop={handleStop}
               onRewind={radio.rewind}
               onBack={handleBack}

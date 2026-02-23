@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Track, RadioStatus, ActivityEntry, ProgressStage } from '../types';
+import { Track, RadioStatus, ActivityEntry, ProgressStage, ViewerInfo } from '../types';
 import { StatusBar } from './StatusBar';
 
 const STAGE_ICON: Record<ProgressStage, string> = {
@@ -36,6 +36,23 @@ function ActivityLog({ entries }: { entries: ActivityEntry[] }) {
   );
 }
 
+/** Abbreviate a full IPv6 address to `first::last` for compact display.
+ *  Plain IPv4 addresses are returned unchanged. */
+function formatIp(ip: string): string {
+  if (!ip.includes(':')) return ip; // IPv4 — already readable
+  const groups = ip.split(':');
+  return `${groups[0]}::${groups[groups.length - 1]}`;
+}
+
+function formatListeningSince(connectedAt: number): string {
+  const diffSec = Math.floor(Date.now() / 1000 - connectedAt);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  return `${diffHr}h ${diffMin % 60}m ago`;
+}
+
 interface RadioPlayerProps {
   readonly: boolean;
   track: Track | null;
@@ -47,6 +64,7 @@ interface RadioPlayerProps {
   progress: number; // 0–1
   listenerCount: number;
   audioBlocked: boolean;
+  viewers?: ViewerInfo[];
   onStop: () => void;
   onRewind: () => void;
   onBack: () => void;
@@ -74,6 +92,7 @@ export function RadioPlayer({
   progress,
   listenerCount,
   audioBlocked,
+  viewers = [],
   onStop,
   onRewind,
   onBack,
@@ -93,6 +112,11 @@ export function RadioPlayer({
       )}
 
       <div className="player__card">
+        {/* Controller identity badge */}
+        {!readonly && (
+          <div className="player__controller-badge">CONTROLLER</div>
+        )}
+
         {/* Now Playing */}
         <div className="player__now-playing">
           <Equalizer active={isPlaying && !audioBlocked} />
@@ -144,54 +168,38 @@ export function RadioPlayer({
           <ActivityLog entries={activityLog} />
         )}
 
-        {/* Controls — hidden for viewers */}
-        {!readonly && (
-          <div className="player__controls">
-            {/* Rewind */}
-            <button
-              className="player__icon-btn"
-              onClick={onRewind}
-              aria-label="Rewind to beginning"
-              disabled={!track}
-              title="Restart from beginning"
-            >
-              <svg viewBox="0 0 24 24" fill="currentColor">
-                <path d="M6 6h2v12H6zM17.5 12 9 6v12l8.5-6z" />
-              </svg>
-            </button>
-
-            {/* Play / Stop */}
-            <button
-              className={`player__play-btn ${isPlaying ? 'player__play-btn--active' : ''}`}
-              onClick={onStop}
-              aria-label={isPlaying ? 'Stop radio' : isLoading ? 'Loading...' : 'Start radio'}
-              disabled={isLoading && !track}
-            >
-              {isPlaying ? (
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                  <rect x="6" y="6" width="4" height="12" rx="1" />
-                  <rect x="14" y="6" width="4" height="12" rx="1" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                  <circle cx="12" cy="12" r="8" opacity="0.3" />
-                  <path d="M12 4a8 8 0 0 1 8 8" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round">
-                    <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite" />
-                  </path>
-                </svg>
-              )}
-            </button>
-
-            {/* Rewind mirror — keeps the play button visually centred */}
-            <div className="player__icon-btn player__icon-btn--spacer" aria-hidden="true" />
-          </div>
-        )}
-
         {/* Error */}
         {errorMessage && (
           <div className="player__error">
             ⚠ {errorMessage}
           </div>
+        )}
+
+        {/* Controller-only: invite description + viewer list */}
+        {!readonly && (
+          <>
+            <p className="player__invite-text">
+              Others can join as listeners by opening this page's URL — they'll hear the stream in read-only mode.
+            </p>
+
+            <div className="player__viewer-list">
+              <h3 className="player__viewer-list-heading">
+                Listeners ({viewers.length})
+              </h3>
+              {viewers.length === 0 ? (
+                <p className="player__viewer-empty">No listeners connected</p>
+              ) : (
+                viewers.map((v, i) => (
+                  <div key={i} className="player__viewer-item">
+                    <span className="player__viewer-ip">{formatIp(v.ip)}</span>
+                    <span className="player__viewer-since">
+                      {formatListeningSince(v.connectedAt)}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
         )}
       </div>
 

@@ -3,6 +3,7 @@ import contextlib
 import logging
 import time
 import uuid
+from typing import Any
 
 from fastapi import WebSocket
 from models import RadioState, TrackInfo, WSMessage, SongPrompt
@@ -11,6 +12,25 @@ from acestep_client import ACEStepClient
 from config import mem_snapshot, get_progressive_duration
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_ip(raw: str) -> str:
+    """Convert IPv6-mapped IPv4 addresses to plain IPv4 strings.
+
+    FastAPI/uvicorn may report:
+      ::1               → 127.0.0.1   (IPv6 loopback)
+      ::ffff:192.168.x.y → 192.168.x.y (IPv6-mapped IPv4)
+    All other values are returned unchanged.
+    """
+    if raw == "::1":
+        return "127.0.0.1"
+    if raw.startswith("::ffff:"):
+        candidate = raw[7:]
+        # Accept only if it looks like a dotted-quad IPv4
+        parts = candidate.split(".")
+        if len(parts) == 4 and all(p.isdigit() for p in parts):
+            return candidate
+    return raw
 
 
 class RadioOrchestrator:
@@ -44,6 +64,7 @@ class RadioOrchestrator:
 
         # WebSocket connections
         self._ws_connections: list[WebSocket] = []
+        self._ws_meta: dict[WebSocket, dict[str, Any]] = {}  # {ws: {ip, connected_at}}
 
         # Role management
         self._controller_ws: WebSocket | None = None
@@ -55,22 +76,26 @@ class RadioOrchestrator:
 
     def add_ws(self, ws: WebSocket) -> None:
         self._ws_connections.append(ws)
+        ip = _normalize_ip(ws.client.host) if ws.client else "unknown"
+        self._ws_meta[ws] = {"ip": ip, "connected_at": time.time()}
         if self._controller_ws is None:
             # First connection (or re-fill after controller left) → controller
             self._controller_ws = ws
-            logger.info(f"[radio] WS connected as CONTROLLER — total: {len(self._ws_connections)}")
+            logger.info(f"[radio] WS connected as CONTROLLER ({ip}) — total: {len(self._ws_connections)}")
             asyncio.create_task(
                 self._send_to(ws, WSMessage(event="role_assigned", data={"role": "controller"}))
             )
         else:
             # Subsequent connections → viewer; send role + late-join state snapshot
-            logger.info(f"[radio] WS connected as VIEWER — total: {len(self._ws_connections)}")
+            logger.info(f"[radio] WS connected as VIEWER ({ip}) — total: {len(self._ws_connections)}")
             asyncio.create_task(self._send_viewer_snapshot(ws))
         asyncio.create_task(self._broadcast_listener_count())
+        asyncio.create_task(self._broadcast_viewer_list_to_controller())
 
     def remove_ws(self, ws: WebSocket) -> None:
         if ws in self._ws_connections:
             self._ws_connections.remove(ws)
+        self._ws_meta.pop(ws, None)
         logger.info(f"[radio] WS disconnected — total connections: {len(self._ws_connections)}")
 
         if ws == self._controller_ws:
@@ -86,6 +111,7 @@ class RadioOrchestrator:
                 asyncio.create_task(self._promote_next_controller())
 
         asyncio.create_task(self._broadcast_listener_count())
+        asyncio.create_task(self._broadcast_viewer_list_to_controller())
 
     # ------------------------------------------------------------------ #
     # Public control methods
@@ -296,6 +322,32 @@ class RadioOrchestrator:
         await self._send_to(
             new_controller,
             WSMessage(event="role_assigned", data={"role": "controller"}),
+        )
+        # Send fresh viewer list to the newly promoted controller
+        await self._broadcast_viewer_list_to_controller()
+
+    def _viewer_list_data(self) -> list[dict[str, Any]]:
+        """Return metadata for all viewers (excluding the controller)."""
+        result = []
+        for ws in self._ws_connections:
+            if ws == self._controller_ws:
+                continue
+            meta = self._ws_meta.get(ws, {})
+            result.append({
+                "ip": meta.get("ip", "unknown"),
+                "connectedAt": meta.get("connected_at", 0),
+            })
+        return result
+
+    async def _broadcast_viewer_list_to_controller(self) -> None:
+        """Unicast the current viewer list to the controller only."""
+        if not self._controller_ws:
+            return
+        viewers = self._viewer_list_data()
+        logger.debug(f"[radio] Sending viewer_list to controller: {len(viewers)} viewer(s)")
+        await self._send_to(
+            self._controller_ws,
+            WSMessage(event="viewer_list", data={"viewers": viewers}),
         )
 
     # ------------------------------------------------------------------ #

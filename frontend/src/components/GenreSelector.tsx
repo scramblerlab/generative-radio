@@ -9,7 +9,7 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
   const [genres, setGenres] = useState<Genre[]>([]);
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [languages, setLanguages] = useState<Language[]>([]);
-  const [selectedGenres, setSelectedGenres] = useState<Set<string>>(new Set());
+  const [selectedGenre, setSelectedGenre] = useState<string>('rock');
   const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(new Set());
   const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
   const [loading, setLoading] = useState(true);
@@ -31,18 +31,9 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
       });
   }, []);
 
-  const toggleGenre = (id: string) => {
-    setSelectedGenres((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-        console.log('[GenreSelector] Genre deselected:', id);
-      } else {
-        next.add(id);
-        console.log('[GenreSelector] Genre selected:', id);
-      }
-      return next;
-    });
+  const selectGenre = (id: string) => {
+    console.log('[GenreSelector] Genre selected:', id);
+    setSelectedGenre(id);
   };
 
   const toggleKeyword = (id: string) => {
@@ -55,10 +46,9 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
   };
 
   const handleStart = () => {
-    const genreList = [...selectedGenres];
     const keywordList = [...selectedKeywords];
-    console.log('[GenreSelector] Starting radio with:', genreList, keywordList, selectedLanguage);
-    onStart(genreList, keywordList, selectedLanguage);
+    console.log('[GenreSelector] Starting radio with:', selectedGenre, keywordList, selectedLanguage);
+    onStart([selectedGenre], keywordList, selectedLanguage);
   };
 
   if (loading) {
@@ -84,9 +74,9 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
           {genres.map((g) => (
             <button
               key={g.id}
-              className={`genre-card ${selectedGenres.has(g.id) ? 'genre-card--selected' : ''}`}
-              onClick={() => toggleGenre(g.id)}
-              aria-pressed={selectedGenres.has(g.id)}
+              className={`genre-card ${selectedGenre === g.id ? 'genre-card--selected' : ''}`}
+              onClick={() => selectGenre(g.id)}
+              aria-pressed={selectedGenre === g.id}
             >
               <span className="genre-card__icon">{g.icon}</span>
               <span className="genre-card__label">{g.label}</span>
@@ -135,12 +125,9 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
       </section>
 
       <div className="selector__footer">
-        {selectedGenres.size > 0 && (
+        {selectedGenre && (
           <p className="selector__summary">
-            {[...selectedGenres]
-              .map((id) => genres.find((g) => g.id === id)?.label)
-              .filter(Boolean)
-              .join(' · ')}
+            {genres.find((g) => g.id === selectedGenre)?.label}
             {selectedKeywords.size > 0 && (
               <span className="selector__summary-keywords">
                 {' '}—{' '}
@@ -159,7 +146,7 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
         <button
           className="start-button"
           onClick={handleStart}
-          disabled={selectedGenres.size === 0}
+          disabled={!selectedGenre}
         >
           Start Radio
         </button>

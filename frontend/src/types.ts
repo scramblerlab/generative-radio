@@ -38,7 +38,7 @@ export interface Language {
 
 // WebSocket message shape from the server
 export interface WSMessage {
-  event: 'track_ready' | 'status' | 'error' | 'progress' | 'listener_count' | 'role_assigned';
+  event: 'track_ready' | 'status' | 'error' | 'progress' | 'listener_count' | 'role_assigned' | 'viewer_list';
   data: Record<string, unknown>;
 }
 
@@ -83,4 +83,13 @@ export interface ProgressData {
   stage: ProgressStage;
   message: string;
   [key: string]: unknown;
+}
+
+export interface ViewerInfo {
+  ip: string;
+  connectedAt: number; // Unix timestamp (seconds)
+}
+
+export interface ViewerListData {
+  viewers: ViewerInfo[];
 }
