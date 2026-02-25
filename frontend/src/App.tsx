@@ -2,17 +2,20 @@ import { useState, useEffect } from 'react';
 import { GenreSelector } from './components/GenreSelector';
 import { RadioPlayer } from './components/RadioPlayer';
 import { useRadio } from './hooks/useRadio';
+import { SessionInfo } from './types';
 import './App.css';
 
 type View = 'selector' | 'player';
 
 export default function App() {
   const [view, setView] = useState<View>('selector');
+  const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
   const radio = useRadio();
 
-  const handleStart = async (genres: string[], keywords: string[], language: string) => {
+  const handleStart = async (genres: string[], keywords: string[], language: string, feeling: string) => {
+    setSessionInfo({ genre: genres[0] ?? '', keywords, language });
     setView('player');
-    await radio.start(genres, keywords, language);
+    await radio.start(genres, keywords, language, feeling);
   };
 
   const handleStop = async () => {
@@ -61,6 +64,7 @@ export default function App() {
             progress={radio.progress}
             listenerCount={radio.listenerCount}
             audioBlocked={radio.audioBlocked}
+            sessionInfo={sessionInfo}
             onStop={handleStop}
             onRewind={radio.rewind}
             onBack={handleBack}
@@ -83,6 +87,7 @@ export default function App() {
               listenerCount={radio.listenerCount}
               audioBlocked={radio.audioBlocked}
               viewers={radio.viewers}
+              sessionInfo={sessionInfo}
               onStop={handleStop}
               onRewind={radio.rewind}
               onBack={handleBack}

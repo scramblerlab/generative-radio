@@ -157,6 +157,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     genres=event_data.get("genres", []),
                     keywords=event_data.get("keywords", []),
                     language=event_data.get("language", "en"),
+                    feeling=event_data.get("feeling", ""),
                 )
             elif event == "stop":
                 await radio.stop_from_ws(websocket)

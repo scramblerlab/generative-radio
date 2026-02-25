@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Track, RadioStatus, ActivityEntry, ProgressStage, ViewerInfo } from '../types';
+import { Track, RadioStatus, ActivityEntry, ProgressStage, ViewerInfo, SessionInfo } from '../types';
 import { StatusBar } from './StatusBar';
 
 const STAGE_ICON: Record<ProgressStage, string> = {
@@ -65,6 +65,7 @@ interface RadioPlayerProps {
   listenerCount: number;
   audioBlocked: boolean;
   viewers?: ViewerInfo[];
+  sessionInfo?: SessionInfo | null;
   onStop: () => void;
   onRewind: () => void;
   onBack: () => void;
@@ -93,6 +94,7 @@ export function RadioPlayer({
   listenerCount,
   audioBlocked,
   viewers = [],
+  sessionInfo,
   onStop,
   onRewind,
   onBack,
@@ -132,6 +134,13 @@ export function RadioPlayer({
           ) : track ? (
             <div className="player__track-info">
               <h2 className="player__song-title">{track.songTitle}</h2>
+              {sessionInfo && (
+                <p className="player__session-info">
+                  {sessionInfo.genre}
+                  {sessionInfo.keywords.length > 0 && ` · ${sessionInfo.keywords.join(', ')}`}
+                  {` · ${sessionInfo.language === 'instrumental' ? 'Instrumental' : sessionInfo.language.toUpperCase()}`}
+                </p>
+              )}
               <p className="player__tags">{track.tags}</p>
               <p className="player__meta">
                 {track.bpm} BPM · {track.keyScale} · {track.duration}s

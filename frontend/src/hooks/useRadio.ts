@@ -26,7 +26,7 @@ export interface UseRadioReturn {
   listenerCount: number;
   audioBlocked: boolean;
   viewers: ViewerInfo[];
-  start: (genres: string[], keywords: string[], language: string) => Promise<void>;
+  start: (genres: string[], keywords: string[], language: string, feeling?: string) => Promise<void>;
   stop: () => Promise<void>;
   rewind: () => void;
   unblockAudio: () => void;
@@ -339,8 +339,8 @@ export function useRadio(): UseRadioReturn {
   // Public API
   // ------------------------------------------------------------------ //
 
-  const start = useCallback(async (genres: string[], keywords: string[], language: string = 'en') => {
-    console.log('[Radio] Starting — genres:', genres, 'keywords:', keywords, 'language:', language);
+  const start = useCallback(async (genres: string[], keywords: string[], language: string = 'en', feeling: string = '') => {
+    console.log('[Radio] Starting — genres:', genres, 'keywords:', keywords, 'language:', language, 'feeling:', feeling);
     nextTrackRef.current = null;
     clearPreloadBlob();
     clearActiveBlob();
@@ -367,7 +367,7 @@ export function useRadio(): UseRadioReturn {
 
     // Send start command over WebSocket. The server validates that this client
     // is the controller and responds via broadcast events (status, track_ready, error).
-    sendWS({ event: 'start', data: { genres, keywords, language } });
+    sendWS({ event: 'start', data: { genres, keywords, language, feeling } });
   }, [clearPreloadBlob, clearActiveBlob, sendWS]);
 
   const stop = useCallback(async () => {

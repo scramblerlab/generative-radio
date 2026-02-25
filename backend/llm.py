@@ -37,6 +37,7 @@ class OllamaClient:
         history: list[str],
         duration: int | None = None,
         language: str = "en",
+        feeling: str = "",
     ) -> SongPrompt:
         """Call Ollama to generate a structured SongPrompt.
 
@@ -50,8 +51,16 @@ class OllamaClient:
             f"[llm] Generating prompt — model: {model}, "
             f"genres: {genres}, keywords: {keywords}, "
             f"history_length: {len(history)}, target_duration: {target_duration}s, "
-            f"language: {language}"
+            f"language: {language}, feeling: {feeling[:50]!r}"
         )
+
+        feeling_section = ""
+        if feeling.strip():
+            feeling_section = (
+                f'\n\nUSER\'S FEELING: "{feeling.strip()[:200]}"\n'
+                "Use this feeling to inspire the song's mood, lyric themes, and musical choices.\n"
+                "Reflect the emotional tone in your lyrics and style tag selection."
+            )
 
         history_section = ""
         if history:
@@ -79,7 +88,7 @@ original song prompts for an AI music generator.
 
 SELECTED GENRES: {', '.join(genres)}
 SELECTED MOODS / KEYWORDS: {', '.join(keywords) if keywords else 'None specified'}
-{history_section}
+{feeling_section}{history_section}
 
 RULES:
 - {lyrics_rule}
