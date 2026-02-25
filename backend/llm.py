@@ -83,21 +83,53 @@ class OllamaClient:
                 "Do not mix in English or any other language."
             )
 
+        vocal_style_rule = (
+            '- "vocal_style": Empty string "" (instrumental track, no vocals).'
+            if is_instrumental else
+            '- "vocal_style": Vocal gender, timbre, and technique.\n'
+            '  Examples: "female vocal, breathy, soft", "male vocal, raspy, powerful belting", "choir, harmonies"'
+        )
+
         system_prompt = f"""You are a creative AI radio DJ. Your job is to generate unique, \
-original song prompts for an AI music generator.
+original song prompts for an AI music generator (ACE-Step).
 
 SELECTED GENRES: {', '.join(genres)}
 SELECTED MOODS / KEYWORDS: {', '.join(keywords) if keywords else 'None specified'}
 {feeling_section}{history_section}
 
-RULES:
+CAPTION DIMENSIONS — fill each field with comma-separated descriptors:
+
+- "style": Genre, sub-genre, and optional era reference.
+  Examples: "smooth jazz, bebop influences", "80s synth-pop, retro", "indie folk, acoustic, Americana"
+- "instruments": Key instruments featured in the track.
+  Examples: "acoustic guitar, piano, soft strings", "synth bass, 808 drums, synth pads, electric guitar"
+- "mood": Emotion, atmosphere, and timbre texture adjectives.
+  Examples: "warm, nostalgic, intimate, airy", "dark, brooding, raw, punchy"
+  Texture words that strongly influence output: warm, bright, crisp, airy, punchy, lush, raw, polished
+{vocal_style_rule}
+- "production": Production style, rhythm feel, and structure hints.
+  Examples: "lo-fi, bedroom pop, laid-back groove, building chorus", "studio-polished, driving beat, fade-out ending"
+
+IMPORTANT:
+- Do NOT put BPM, key, or duration in any caption field — those have their own parameters.
+- Avoid conflicting descriptors within a field (e.g., "ambient" + "aggressive" in mood).
+- The mood and vocal_style MUST be consistent with the lyrics you write.
+- Vary the style, instruments, mood, and themes between songs — keep it fresh.
+
+LYRICS RULES:
 - {lyrics_rule}
-- Write {'no lyrics (instrumental)' if is_instrumental else '2–4 lyric sections using [verse], [chorus], [bridge] markers'}
-- The "tags" field must be a comma-separated list of musical style descriptors \
-that ACE-Step understands: sub-genre, instruments, mood, tempo feel, {'no vocals, ' if is_instrumental else ''}vocal style, production style, etc.
-- Vary the sub-genre, tempo, key, mood, and lyric themes between songs
-- {'Lyrics are empty for instrumental tracks' if is_instrumental else 'Lyrics should be creative and evocative, not generic or clichéd'}
-- {'Skip this rule' if is_instrumental else 'Keep lyrics concise: 4–8 lines per section'}
+- Use ACE-Step structure tags: [Intro], [Verse], [Verse 1], [Verse 2], [Pre-Chorus], [Chorus], [Bridge], [Outro]
+- {'Set lyrics to an empty string.' if is_instrumental else 'Include 3-5 sections. Always include at least one [Verse] and one [Chorus].'}
+- {'Skip this rule.' if is_instrumental else 'You may add [Instrumental], [Guitar Solo], or [Piano Interlude] for breaks.'}
+- {'Skip this rule.' if is_instrumental else 'You may combine a tag with ONE style modifier: [Chorus - anthemic], [Bridge - whispered], [Verse - spoken word]'}
+- {'Skip this rule.' if is_instrumental else 'Keep lines to 6-10 syllables for natural singing rhythm.'}
+- {'Skip this rule.' if is_instrumental else 'Separate sections with blank lines.'}
+- {'Skip this rule.' if is_instrumental else 'Use UPPERCASE sparingly for high-intensity climax lines in choruses.'}
+- {'Skip this rule.' if is_instrumental else 'Use parentheses for background vocals: "Into the light (into the light)"'}
+- {'Skip this rule.' if is_instrumental else 'Stick to one core metaphor per song for lyrical cohesion.'}
+- {'Skip this rule.' if is_instrumental else 'Lyrics should be creative and evocative, not generic or clichéd. Avoid adjective stacking and mixed metaphors.'}
+
+METADATA RULES:
 - BPM must match the genre and mood naturally
 - Duration must be exactly {target_duration} seconds"""
 
@@ -131,5 +163,10 @@ that ACE-Step understands: sub-genre, instruments, mood, tempo feel, {'no vocals
             f"[llm] Prompt generated in {elapsed:.1f}s — "
             f"'{prompt.song_title}' | {prompt.bpm} BPM | {prompt.key_scale} | {prompt.duration}s"
         )
-        logger.debug(f"[llm] Tags: {prompt.tags}")
+        logger.debug(f"[llm] Style: {prompt.style}")
+        logger.debug(f"[llm] Instruments: {prompt.instruments}")
+        logger.debug(f"[llm] Mood: {prompt.mood}")
+        logger.debug(f"[llm] Vocal: {prompt.vocal_style}")
+        logger.debug(f"[llm] Production: {prompt.production}")
+        logger.debug(f"[llm] Combined caption: {prompt.tags}")
         return prompt

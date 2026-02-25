@@ -119,16 +119,15 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
 
       <section className="selector__section">
         <h2 className="selector__section-title">Choose your genre</h2>
-        <div className="genre-grid">
+        <div className="genre-row">
           {genres.map((g) => (
             <button
               key={g.id}
-              className={`genre-card ${selectedGenre === g.id ? 'genre-card--selected' : ''}`}
+              className={`genre-pill ${selectedGenre === g.id ? 'genre-pill--selected' : ''}`}
               onClick={() => selectGenre(g.id)}
               aria-pressed={selectedGenre === g.id}
             >
-              <span className="genre-card__icon">{g.icon}</span>
-              <span className="genre-card__label">{g.label}</span>
+              {g.label}
             </button>
           ))}
         </div>

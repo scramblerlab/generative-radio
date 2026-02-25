@@ -13,13 +13,26 @@ class RadioState(str, Enum):
 
 
 class SongPrompt(BaseModel):
-    """Structured output from the Ollama LLM DJ brain."""
+    """Structured output from the Ollama LLM DJ brain.
+
+    Caption is split into 5 dimension fields covering ACE-Step's 9 recommended
+    caption dimensions.  See docs/llm-prompt-improvement-plan.md for rationale.
+    """
     song_title: str = Field(description="Creative title for the song")
-    tags: str = Field(description="Comma-separated music style tags for ACE-Step")
-    lyrics: str = Field(description="Song lyrics with [verse], [chorus], [bridge] markers")
+    style: str = Field(description="Genre, sub-genre, and optional era reference (e.g. 'smooth jazz, bebop influences, late-night club')")
+    instruments: str = Field(description="Key instruments featured in the track (e.g. 'mellow saxophone, soft piano, upright bass')")
+    mood: str = Field(description="Emotion, atmosphere, and timbre texture (e.g. 'warm, intimate, nostalgic, smoky, lush')")
+    vocal_style: str = Field(description="Vocal gender, timbre, and technique; empty string for instrumental (e.g. 'female vocal, breathy, soft')")
+    production: str = Field(description="Production style, rhythm feel, and structure hints (e.g. 'lo-fi, bedroom pop, laid-back groove')")
+    lyrics: str = Field(description="Song lyrics with structure tags like [Intro], [Verse], [Pre-Chorus], [Chorus], [Bridge], [Outro]")
     bpm: int = Field(description="Tempo in BPM", ge=60, le=200)
     key_scale: str = Field(description="Musical key, e.g. 'C Major', 'Am', 'F# Minor'")
     duration: int = Field(description="Song duration in seconds", ge=30, le=MAX_DURATION_S)
+
+    @property
+    def tags(self) -> str:
+        """Concatenate all dimension fields into a single comma-separated caption string."""
+        return ", ".join(filter(None, [self.style, self.instruments, self.mood, self.vocal_style, self.production]))
 
     @field_validator("duration")
     @classmethod
