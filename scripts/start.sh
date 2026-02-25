@@ -122,13 +122,29 @@ cd "$PROJECT_DIR"
 echo "  Frontend PID: $FRONTEND_PID  (log: /tmp/generative-radio-frontend.log)"
 
 # ── 5. Cloudflare Tunnel ────────────────────────────────────────────────────
-echo "[5/5] Starting Cloudflare quick tunnel..."
+echo "[5/5] Starting Cloudflare tunnel..."
 CLOUDFLARED_PID=""
 TUNNEL_URL=""
 
+# Named tunnel name — must match `cloudflared tunnel create <NAME>` from one-time setup.
+# Override via TUNNEL_NAME env var if your tunnel has a different name.
+CF_TUNNEL_NAME="${TUNNEL_NAME:-generative-radio}"
+CF_TUNNEL_DOMAIN="${TUNNEL_DOMAIN:-radio.scrambler-lab.com}"
+
 if ! command -v cloudflared &>/dev/null; then
   echo "  cloudflared not found — skipping tunnel. Run ./scripts/setup.sh to install."
+elif [ -f "$HOME/.cloudflared/config.yml" ]; then
+  # Named tunnel — permanent fixed domain (see docs/cloudflare-named-tunnel-setup.md)
+  echo "  Named tunnel config found — starting tunnel '$CF_TUNNEL_NAME'..."
+  cloudflared tunnel run "$CF_TUNNEL_NAME" \
+    > /tmp/generative-radio-cloudflared.log 2>&1 &
+  CLOUDFLARED_PID=$!
+  TUNNEL_URL="https://$CF_TUNNEL_DOMAIN"
+  echo "  Cloudflared PID: $CLOUDFLARED_PID  (log: /tmp/generative-radio-cloudflared.log)"
+  echo "  Fixed URL: $TUNNEL_URL"
 else
+  # Quick tunnel fallback — random URL (for dev machines without named tunnel setup)
+  echo "  No named tunnel config — falling back to quick tunnel (random URL)..."
   cloudflared tunnel --url http://localhost:5173 \
     > /tmp/generative-radio-cloudflared.log 2>&1 &
   CLOUDFLARED_PID=$!

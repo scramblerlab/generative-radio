@@ -577,7 +577,11 @@ class RadioOrchestrator:
             f'Composing "{song_prompt.song_title}"…',
             {"title": song_prompt.song_title},
         )
-        logger.info(f"[radio] [{short_id}] Sending to ACE-Step...")
+        opts = self.advanced_options
+        logger.info(
+            f"[radio] [{short_id}] Sending to ACE-Step — "
+            f"advanced_options: {opts}, pinned_seed: {self._pinned_seed or 'none'}"
+        )
         t_ace = time.monotonic()
 
         async def _emit_acestep_progress() -> None:
@@ -593,7 +597,6 @@ class RadioOrchestrator:
 
         _progress_task = asyncio.create_task(_emit_acestep_progress())
         try:
-            opts = self.advanced_options
             audio_bytes, result_meta = await self.acestep.generate_song(
                 song_prompt, vocal_language=self.language,
                 time_signature=opts.get("timeSignature"),
@@ -610,7 +613,9 @@ class RadioOrchestrator:
         result_seed = str(result_meta.get("seed_value", ""))
         if result_seed:
             self._last_seed = result_seed
-            logger.debug(f"[radio] [{short_id}] Captured seed: {result_seed}")
+            logger.info(f"[radio] [{short_id}] Captured seed from result: {result_seed}")
+        else:
+            logger.warning(f"[radio] [{short_id}] No seed_value in ACE-Step result metadata")
 
         elapsed_ace = time.monotonic() - t_ace
         logger.info(

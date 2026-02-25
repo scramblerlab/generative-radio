@@ -75,8 +75,11 @@ class ACEStepClient:
             payload["use_random_seed"] = False
         logger.info(
             f"[acestep] '{prompt.song_title}' — submitting task "
-            f"(bpm: {prompt.bpm}, key: {prompt.key_scale}, duration: {prompt.duration}s)"
+            f"(bpm: {prompt.bpm}, key: {prompt.key_scale}, duration: {prompt.duration}s, "
+            f"steps: {inference_steps}, model: {model or 'default'}, "
+            f"time_sig: {time_signature or 'auto'}, seed: {seed or 'random'})"
         )
+        logger.debug(f"[acestep] '{prompt.song_title}' full payload: {payload}")
         logger.debug(f"[acestep] '{prompt.song_title}' tags: {prompt.tags[:100]}")
         logger.debug(f"[acestep] '{prompt.song_title}' lyrics preview: {prompt.lyrics[:80].replace(chr(10), ' ')}")
 
