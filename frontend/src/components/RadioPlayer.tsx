@@ -66,6 +66,10 @@ interface RadioPlayerProps {
   audioBlocked: boolean;
   viewers?: ViewerInfo[];
   sessionInfo?: SessionInfo | null;
+  djName?: string;
+  moreLikeThis?: boolean;
+  onToggleMoreLikeThis?: () => void;
+  canPinSeed?: boolean;
   onStop: () => void;
   onRewind: () => void;
   onBack: () => void;
@@ -95,6 +99,10 @@ export function RadioPlayer({
   audioBlocked,
   viewers = [],
   sessionInfo,
+  djName = '',
+  moreLikeThis = false,
+  onToggleMoreLikeThis,
+  canPinSeed = false,
   onStop,
   onRewind,
   onBack,
@@ -184,6 +192,19 @@ export function RadioPlayer({
           </div>
         )}
 
+        {/* Controller-only: "More Like This" seed toggle */}
+        {!readonly && onToggleMoreLikeThis && (
+          <button
+            className={`player__more-like-this ${moreLikeThis ? 'player__more-like-this--active' : ''}`}
+            onClick={onToggleMoreLikeThis}
+            disabled={!canPinSeed && !moreLikeThis}
+            title={moreLikeThis ? 'Seed pinned — next tracks will have similar character. Click to unpin.' : 'Pin the current track\'s seed to generate similar-sounding tracks'}
+          >
+            <span className="player__more-like-this-icon">{moreLikeThis ? '🔒' : '🎲'}</span>
+            More Like This{moreLikeThis ? ' (ON)' : ''}
+          </button>
+        )}
+
         {/* Controller-only: invite description + viewer list */}
         {!readonly && (
           <>
@@ -213,6 +234,12 @@ export function RadioPlayer({
       </div>
 
       <StatusBar status={status} message={statusMessage} nextReady={nextReady} listenerCount={listenerCount} />
+
+      <p className="player__presented-by">
+        {djName.trim()
+          ? `PRESENTED BY ${djName.trim().toUpperCase()} AND GENERATIVE RADIO`
+          : 'PRESENTED BY GENERATIVE RADIO'}
+      </p>
     </div>
   );
 }

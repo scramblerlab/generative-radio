@@ -38,6 +38,12 @@ export interface SessionInfo {
   language: string;
 }
 
+export interface AdvancedOptions {
+  timeSignature?: string;   // "2", "3", "4", "6", or undefined (auto)
+  inferenceSteps: number;   // 4–16, default 8
+  model: string;            // "turbo", "turbo-shift1", "turbo-shift3", "turbo-continuous"
+}
+
 export interface Language {
   code: string;   // ISO 639-1 code, or "instrumental"
   label: string;  // Display name (may be in native script)
@@ -61,6 +67,7 @@ export interface RoleAssignedData {
 export interface TrackReadyData {
   track: Track;
   isNext: boolean;
+  seed?: string;
 }
 
 export interface StatusData {

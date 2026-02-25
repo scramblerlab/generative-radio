@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { GenreSelector } from './components/GenreSelector';
 import { RadioPlayer } from './components/RadioPlayer';
 import { useRadio } from './hooks/useRadio';
-import { SessionInfo } from './types';
+import { SessionInfo, AdvancedOptions } from './types';
 import './App.css';
 
 type View = 'selector' | 'player';
@@ -10,12 +10,17 @@ type View = 'selector' | 'player';
 export default function App() {
   const [view, setView] = useState<View>('selector');
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
+  const [djName, setDjName] = useState('');
   const radio = useRadio();
 
-  const handleStart = async (genres: string[], keywords: string[], language: string, feeling: string) => {
+  const handleStart = async (
+    genres: string[], keywords: string[], language: string,
+    feeling: string, name: string, advancedOptions?: AdvancedOptions,
+  ) => {
     setSessionInfo({ genre: genres[0] ?? '', keywords, language });
+    setDjName(name);
     setView('player');
-    await radio.start(genres, keywords, language, feeling);
+    await radio.start(genres, keywords, language, feeling, advancedOptions);
   };
 
   const handleStop = async () => {
@@ -46,13 +51,11 @@ export default function App() {
 
       <main className="app">
         {radio.role === null ? (
-          // Waiting for role_assigned from server — brief connecting state
           <div className="selector-loading">
             <div className="spinner" />
             <p>Connecting...</p>
           </div>
         ) : radio.role === 'viewer' ? (
-          // Viewer: read-only player, always shown (never sees GenreSelector)
           <RadioPlayer
             readonly
             track={radio.currentTrack}
@@ -65,13 +68,14 @@ export default function App() {
             listenerCount={radio.listenerCount}
             audioBlocked={radio.audioBlocked}
             sessionInfo={sessionInfo}
+            djName={djName}
+            moreLikeThis={false}
             onStop={handleStop}
             onRewind={radio.rewind}
             onBack={handleBack}
             onUnblockAudio={radio.unblockAudio}
           />
         ) : (
-          // Controller: full selector → player flow
           view === 'selector' ? (
             <GenreSelector onStart={handleStart} />
           ) : (
@@ -88,6 +92,10 @@ export default function App() {
               audioBlocked={radio.audioBlocked}
               viewers={radio.viewers}
               sessionInfo={sessionInfo}
+              djName={djName}
+              moreLikeThis={radio.moreLikeThis}
+              onToggleMoreLikeThis={() => radio.setMoreLikeThis(!radio.moreLikeThis)}
+              canPinSeed={!!radio.lastSeed}
               onStop={handleStop}
               onRewind={radio.rewind}
               onBack={handleBack}

@@ -13,6 +13,7 @@ import {
   RoleAssignedData,
   ViewerInfo,
   ViewerListData,
+  AdvancedOptions,
 } from '../types';
 
 export interface UseRadioReturn {
@@ -26,7 +27,10 @@ export interface UseRadioReturn {
   listenerCount: number;
   audioBlocked: boolean;
   viewers: ViewerInfo[];
-  start: (genres: string[], keywords: string[], language: string, feeling?: string) => Promise<void>;
+  lastSeed: string | null;
+  moreLikeThis: boolean;
+  setMoreLikeThis: (on: boolean) => void;
+  start: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => Promise<void>;
   stop: () => Promise<void>;
   rewind: () => void;
   unblockAudio: () => void;
@@ -50,6 +54,8 @@ export function useRadio(): UseRadioReturn {
   const [listenerCount, setListenerCount] = useState(0);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [viewers, setViewers] = useState<ViewerInfo[]>([]);
+  const [lastSeed, setLastSeed] = useState<string | null>(null);
+  const [moreLikeThis, setMoreLikeThisState] = useState(false);
   const activityIdRef = useRef(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -245,7 +251,8 @@ export function useRadio(): UseRadioReturn {
         console.log('[Radio] Role assigned:', assignedRole);
         setRole(assignedRole);
       } else if (msg.event === 'track_ready') {
-        const { track, isNext } = msg.data as unknown as TrackReadyData;
+        const { track, isNext, seed } = msg.data as unknown as TrackReadyData;
+        if (seed) setLastSeed(seed);
 
         if (!isNext) {
           // Server says: play this track now (first track or buffering-recovery path).
@@ -339,8 +346,8 @@ export function useRadio(): UseRadioReturn {
   // Public API
   // ------------------------------------------------------------------ //
 
-  const start = useCallback(async (genres: string[], keywords: string[], language: string = 'en', feeling: string = '') => {
-    console.log('[Radio] Starting — genres:', genres, 'keywords:', keywords, 'language:', language, 'feeling:', feeling);
+  const start = useCallback(async (genres: string[], keywords: string[], language: string = 'en', feeling: string = '', advancedOptions?: AdvancedOptions) => {
+    console.log('[Radio] Starting — genres:', genres, 'keywords:', keywords, 'language:', language, 'feeling:', feeling, 'advanced:', advancedOptions);
     nextTrackRef.current = null;
     clearPreloadBlob();
     clearActiveBlob();
@@ -367,7 +374,9 @@ export function useRadio(): UseRadioReturn {
 
     // Send start command over WebSocket. The server validates that this client
     // is the controller and responds via broadcast events (status, track_ready, error).
-    sendWS({ event: 'start', data: { genres, keywords, language, feeling } });
+    setLastSeed(null);
+    setMoreLikeThisState(false);
+    sendWS({ event: 'start', data: { genres, keywords, language, feeling, advancedOptions } });
   }, [clearPreloadBlob, clearActiveBlob, sendWS]);
 
   const stop = useCallback(async () => {
@@ -379,8 +388,9 @@ export function useRadio(): UseRadioReturn {
     setNextReady(false);
     setStatus('stopped');
     setProgress(0);
+    setLastSeed(null);
+    setMoreLikeThisState(false);
 
-    // Send stop command over WebSocket. Server validates controller role.
     sendWS({ event: 'stop' });
   }, [clearPreloadBlob, clearActiveBlob, sendWS]);
 
@@ -409,6 +419,17 @@ export function useRadio(): UseRadioReturn {
     });
   }, [currentTrack]);
 
+  const setMoreLikeThis = useCallback((on: boolean) => {
+    setMoreLikeThisState(on);
+    if (on && lastSeed) {
+      console.log('[Radio] Pinning seed:', lastSeed);
+      sendWS({ event: 'pin_seed', data: { seed: lastSeed } });
+    } else {
+      console.log('[Radio] Unpinning seed');
+      sendWS({ event: 'unpin_seed' });
+    }
+  }, [lastSeed, sendWS]);
+
   return {
     role,
     status,
@@ -420,6 +441,9 @@ export function useRadio(): UseRadioReturn {
     listenerCount,
     audioBlocked,
     viewers,
+    lastSeed,
+    moreLikeThis,
+    setMoreLikeThis,
     start,
     stop,
     rewind,
