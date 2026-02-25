@@ -158,11 +158,18 @@ async def websocket_endpoint(websocket: WebSocket):
                     keywords=event_data.get("keywords", []),
                     language=event_data.get("language", "en"),
                     feeling=event_data.get("feeling", ""),
+                    advanced_options=event_data.get("advancedOptions"),
                 )
             elif event == "stop":
                 await radio.stop_from_ws(websocket)
             elif event == "skip":
                 await radio.skip_from_ws(websocket)
+            elif event == "pin_seed":
+                seed = data.get("data", {}).get("seed", "")
+                if seed:
+                    await radio.pin_seed_from_ws(websocket, seed)
+            elif event == "unpin_seed":
+                await radio.unpin_seed_from_ws(websocket)
             else:
                 logger.warning(f"[main] Unknown WS event from client: {event}")
 

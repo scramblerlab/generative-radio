@@ -44,7 +44,12 @@ class RadioOrchestrator:
         self.keywords: list[str] = []
         self.language: str = "en"             # ISO 639-1 code or "instrumental"
         self.feeling: str = ""                # Free-text mood from user
+        self.advanced_options: dict = {}      # time_signature, inference_steps, model
         self.history: list[str] = []          # Song titles played this session
+
+        # Seed pinning ("More Like This")
+        self._last_seed: str | None = None    # Seed from the most recent ACE-Step result
+        self._pinned_seed: str | None = None  # When set, reuse this seed for all generations
 
         # Track management
         self.current_track: TrackInfo | None = None
@@ -101,7 +106,8 @@ class RadioOrchestrator:
 
         if ws == self._controller_ws:
             self._controller_ws = None
-            logger.info("[radio] Controller disconnected")
+            self._pinned_seed = None
+            logger.info("[radio] Controller disconnected — seed unpinned")
             prebuffer_active = (
                 self._prebuffer_task is not None and not self._prebuffer_task.done()
             )
@@ -118,7 +124,11 @@ class RadioOrchestrator:
     # Public control methods
     # ------------------------------------------------------------------ #
 
-    async def start(self, genres: list[str], keywords: list[str], language: str = "en", feeling: str = "") -> None:
+    async def start(
+        self, genres: list[str], keywords: list[str],
+        language: str = "en", feeling: str = "",
+        advanced_options: dict | None = None,
+    ) -> None:
         """Start a new radio session, stopping any existing one first."""
         if self._task and not self._task.done():
             logger.info("[radio] Stopping existing session before starting new one")
@@ -128,16 +138,19 @@ class RadioOrchestrator:
         self.keywords = keywords
         self.language = language
         self.feeling = feeling
+        self.advanced_options = advanced_options or {}
         self.history = []
         self.next_track = None
         self._stop_event.clear()
         self._track_ended_event.clear()
         self._next_track_ready_event.clear()
         self.audio_cache.clear()
-        self._last_track_ended_at = 0.0  # Reset debounce for fresh session
-        self._pending_promotion = False   # Clear any stale promotion from previous session
+        self._last_track_ended_at = 0.0
+        self._pending_promotion = False
+        self._last_seed = None
+        self._pinned_seed = None
 
-        logger.info(f"[radio] Starting session — genres: {genres}, keywords: {keywords}, language: {language}, feeling: {feeling[:50]!r}")
+        logger.info(f"[radio] Starting session — genres: {genres}, keywords: {keywords}, language: {language}, feeling: {feeling[:50]!r}, advanced: {self.advanced_options}")
         self._task = asyncio.create_task(self._radio_loop(), name="radio-loop")
 
     async def stop(self) -> None:
@@ -160,6 +173,8 @@ class RadioOrchestrator:
         self.current_track = None
         self.next_track = None
         self.audio_cache.clear()
+        self._pinned_seed = None
+        self._last_seed = None
         logger.info("[radio] Session stopped and cleaned up")
 
     async def skip(self) -> None:
@@ -193,6 +208,7 @@ class RadioOrchestrator:
     async def start_from_ws(
         self, ws: WebSocket, genres: list[str], keywords: list[str],
         language: str = "en", feeling: str = "",
+        advanced_options: dict | None = None,
     ) -> None:
         """Start the radio session — authorised only for the current controller."""
         if ws != self._controller_ws:
@@ -206,7 +222,21 @@ class RadioOrchestrator:
                 ws, WSMessage(event="error", data={"message": "At least one genre is required"})
             )
             return
-        await self.start(genres, keywords, language, feeling)
+        await self.start(genres, keywords, language, feeling, advanced_options)
+
+    async def pin_seed_from_ws(self, ws: WebSocket, seed: str) -> None:
+        """Pin a seed for subsequent generations — controller only."""
+        if ws != self._controller_ws:
+            return
+        self._pinned_seed = seed
+        logger.info(f"[radio] Seed pinned: {seed}")
+
+    async def unpin_seed_from_ws(self, ws: WebSocket) -> None:
+        """Unpin the seed — controller only."""
+        if ws != self._controller_ws:
+            return
+        self._pinned_seed = None
+        logger.info("[radio] Seed unpinned")
 
     async def stop_from_ws(self, ws: WebSocket) -> None:
         """Stop the radio session — authorised only for the current controller."""
@@ -563,11 +593,24 @@ class RadioOrchestrator:
 
         _progress_task = asyncio.create_task(_emit_acestep_progress())
         try:
-            audio_bytes, _metadata = await self.acestep.generate_song(song_prompt, vocal_language=self.language)
+            opts = self.advanced_options
+            audio_bytes, result_meta = await self.acestep.generate_song(
+                song_prompt, vocal_language=self.language,
+                time_signature=opts.get("timeSignature"),
+                inference_steps=opts.get("inferenceSteps", 8),
+                model=opts.get("model"),
+                seed=self._pinned_seed,
+            )
         finally:
             _progress_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await _progress_task
+
+        # Capture seed from ACE-Step result for "More Like This"
+        result_seed = str(result_meta.get("seed_value", ""))
+        if result_seed:
+            self._last_seed = result_seed
+            logger.debug(f"[radio] [{short_id}] Captured seed: {result_seed}")
 
         elapsed_ace = time.monotonic() - t_ace
         logger.info(
@@ -619,9 +662,10 @@ class RadioOrchestrator:
         }
         label = "next (pre-buffered)" if is_next else "current (play now)"
         logger.info(f"[radio] Broadcasting track_ready — '{track.song_title}' [{label}]")
-        await self.broadcast(
-            WSMessage(event="track_ready", data={"track": track_dict, "isNext": is_next})
-        )
+        data: dict = {"track": track_dict, "isNext": is_next}
+        if self._last_seed:
+            data["seed"] = self._last_seed
+        await self.broadcast(WSMessage(event="track_ready", data=data))
 
     async def _broadcast_status(self, state: str, message: str) -> None:
         logger.debug(f"[radio] Status broadcast: [{state}] {message}")

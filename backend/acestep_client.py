@@ -34,15 +34,23 @@ class ACEStepClient:
             logger.error(f"[acestep] Health check failed — is ACE-Step running on {self.base_url}? Error: {e}")
             return False
 
-    async def submit_task(self, prompt: SongPrompt, vocal_language: str = "en") -> str:
+    async def submit_task(
+        self,
+        prompt: SongPrompt,
+        vocal_language: str = "en",
+        *,
+        time_signature: str | None = None,
+        inference_steps: int = 8,
+        model: str | None = None,
+        seed: str | None = None,
+    ) -> str:
         """POST /release_task — submit a music generation job, return task_id.
 
         vocal_language: ISO 639-1 code (e.g. "en", "ja", "ko"), or "unknown" for
         auto-detection / instrumental tracks.
         """
-        # "instrumental" is our internal sentinel; ACE-Step uses "unknown"
         ace_language = "unknown" if vocal_language == "instrumental" else vocal_language
-        payload = {
+        payload: dict = {
             "prompt": prompt.tags,
             "lyrics": prompt.lyrics,
             "bpm": prompt.bpm,
@@ -55,9 +63,16 @@ class ACEStepClient:
             "use_cot_language": False,   # Don't re-detect language — we pass it explicitly
             "batch_size": 1,
             "audio_format": "mp3",
-            "inference_steps": 8,       # Turbo: fast with good quality
-            "use_random_seed": True,
+            "inference_steps": inference_steps,
+            "use_random_seed": seed is None,
         }
+        if time_signature:
+            payload["time_signature"] = time_signature
+        if model:
+            payload["model"] = f"acestep-v15-{model}" if not model.startswith("acestep-") else model
+        if seed is not None:
+            payload["seed"] = seed
+            payload["use_random_seed"] = False
         logger.info(
             f"[acestep] '{prompt.song_title}' — submitting task "
             f"(bpm: {prompt.bpm}, key: {prompt.key_scale}, duration: {prompt.duration}s)"
@@ -163,7 +178,16 @@ class ACEStepClient:
         await self.client.aclose()
         logger.info("[acestep] HTTP client closed")
 
-    async def generate_song(self, prompt: SongPrompt, vocal_language: str = "en") -> tuple[bytes, dict]:
+    async def generate_song(
+        self,
+        prompt: SongPrompt,
+        vocal_language: str = "en",
+        *,
+        time_signature: str | None = None,
+        inference_steps: int = 8,
+        model: str | None = None,
+        seed: str | None = None,
+    ) -> tuple[bytes, dict]:
         """Full pipeline: submit → poll → download.
 
         Returns (audio_bytes, result_metadata).
@@ -171,7 +195,13 @@ class ACEStepClient:
         logger.info(f"[acestep] ── Starting pipeline for '{prompt.song_title}' (lang: {vocal_language}) ──")
         t0 = time.monotonic()
 
-        task_id = await self.submit_task(prompt, vocal_language=vocal_language)
+        task_id = await self.submit_task(
+            prompt, vocal_language=vocal_language,
+            time_signature=time_signature,
+            inference_steps=inference_steps,
+            model=model,
+            seed=seed,
+        )
         result = await self.poll_task(task_id, song_title=prompt.song_title)
 
         # Parse the audio path from the file URL field
