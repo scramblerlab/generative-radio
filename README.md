@@ -1,6 +1,6 @@
 # Generative Radio
 
-A fully local, offline AI radio web app. Pick a genre, mood, and vocal language — the app generates and plays an endless stream of original AI-composed songs with no cloud APIs required.
+A fully local, offline AI radio web app. Pick a genre, mood, vocal language, and tell it how you feel — the app generates and plays an endless stream of original AI-composed songs with no cloud APIs required.
 
 ## Requirements
 
@@ -35,53 +35,55 @@ source ~/.zshrc
 
 Open **http://localhost:5173** in your browser.
 
-When `cloudflared` is installed, a free public URL is printed in the startup banner — share it to access the app from any device on the internet.
+When `cloudflared` is installed, a public URL is printed in the startup banner — share it to access the app from any device.
 
 ## How it works
 
-1. Select a genre and optional mood keywords
+1. Select a genre (24 options) and optional mood keywords (29 keywords in 4 categories)
 2. Choose a vocal language (11 languages) or instrumental mode
-3. Click **Start Radio**
-4. A local LLM (Ollama + Qwen3) generates a creative song prompt
-5. ACE-Step 1.5 generates a full MP3 with vocals (or instrumental)
-6. The song plays in your browser with a live activity log showing generation progress
-7. The next song is pre-generated while the current one plays — the frontend pre-fetches audio bytes into memory for seamless, zero-latency transitions
+3. Optionally describe how you're feeling in free text
+4. Optionally tune advanced ACE-Step parameters (time signature, inference steps, model variant)
+5. Click **Start Radio**
+6. A local LLM (Ollama + Qwen3) generates a dimension-based song prompt (style, instruments, mood, vocal style, production)
+7. ACE-Step 1.5 generates a full MP3 with semantic audio codes for melodic structure
+8. The song plays in your browser with a live activity log showing generation progress
+9. The next song is pre-generated while the current one plays — the frontend pre-fetches audio bytes into memory for seamless, zero-latency transitions
 
 ## Multi-listener mode
 
-Multiple browsers can connect to the same session. The first connection becomes the **controller** — they pick genres, start/stop the radio, and see a list of connected listeners. Everyone else joins as a **viewer** with a read-only player that streams the same audio in real time.
+Multiple browsers can connect to the same session. The first connection becomes the **controller** — they pick genres, start/stop the radio, pin seeds with "More Like This", and see connected listeners. Everyone else joins as a **viewer** with a read-only player.
 
 If the controller disconnects, the next viewer is automatically promoted.
 
-Share the URL (local or remote tunnel) with others and they'll join as listeners instantly.
+## "More Like This" seed pinning
+
+The controller can toggle **More Like This** to pin the current track's generation seed. All subsequent tracks will use the same seed, producing similar sonic character while the LLM generates fresh lyrics and styles. Toggle off to return to random seeds.
 
 ## Supported languages
 
-English, Español, Français, Deutsch, Italiano, 中文, Ελληνικά, Suomi, Svenska, 日本語, 한국語, and a **No Vocal** (instrumental) mode.
+English, Español, Français, Deutsch, Italiano, 中文, Ελληνικά, Suomi, Svenska, 日本語, 한국어, and a **No Vocal** (instrumental) mode.
 
-The selected language affects both the LLM-generated lyrics and the ACE-Step vocal synthesis.
+## Advanced options
 
-## Player controls
+The controller can configure ACE-Step parameters before starting:
 
-| Button | Action |
-|--------|--------|
-| ⏮ Rewind | Restart the current track from the beginning |
-| ⏸ Stop | Stop the radio and return to genre selection |
+| Option | Default | Range |
+|---|---|---|
+| Time Signature | Auto | 2/4, 3/4, 4/4, 6/8 |
+| Inference Steps | 8 | 4–16 (more = higher quality, slower) |
+| DiT Model Variant | turbo | turbo, turbo-shift1, turbo-shift3, turbo-continuous |
+
+See the [ACE-Step 1.5 Tutorial](https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/Tutorial.md) for details on what each parameter does.
 
 ## Remote access
 
-`start.sh` automatically starts a [Cloudflare Quick Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) on port 5173. When the tunnel is ready, the URL appears in the startup banner:
+`start.sh` supports two tunnel modes:
 
-```
-║  Local:      http://localhost:5173           ║
-║  Remote:     https://xxxx-xxxx.trycloudflare.com
-```
+**Named tunnel (production):** If `~/.cloudflared/config.yml` is configured, the app is available at a fixed domain (e.g., `https://radio.scrambler-lab.com`). See `docs/cloudflare-named-tunnel-setup.md` for one-time setup.
 
-Share the remote URL with anyone — it works on any device without port forwarding or a static IP. Viewers joining via the tunnel automatically get the read-only listener experience.
+**Quick tunnel (dev fallback):** If no named tunnel is configured, a random `*.trycloudflare.com` URL is generated on each startup.
 
-**How it works:** The Vite dev server proxies all backend traffic (`/api/...`, `/ws`) internally, so a single tunnel on port 5173 exposes the full app including WebSockets. No tunnel-side configuration is needed.
-
-**Note:** Cloudflare Quick Tunnels are ephemeral — the URL changes each time `start.sh` is run. For a stable permanent URL, set up a [named Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/) with your own domain.
+Both modes proxy all traffic including WebSockets. Viewers joining via the tunnel automatically get the read-only listener experience.
 
 ## Architecture
 
@@ -93,11 +95,11 @@ Share the remote URL with anyone — it works on any device without port forward
 | Ollama | 11434 | LLM inference |
 | Cloudflare Tunnel | — | Exposes port 5173 publicly (optional) |
 
-See `BUILD_SPEC.md` for the full technical specification including WebSocket protocol, data models, and implementation details.
+See `BUILD_SPEC.md` for the full technical specification.
 
 ## LLM and audio duration
 
-The app always uses **`qwen3:8b`** (5.2 GB) for song prompt generation. Using the smaller model frees memory for ACE-Step's Metal buffers, which is the primary performance bottleneck.
+The app always uses **`qwen3:8b`** (5.2 GB) for song prompt generation, generating 5 dimension fields (style, instruments, mood, vocal style, production) that are concatenated into a rich ACE-Step caption.
 
 Audio duration is selected automatically at startup based on unified memory:
 
