@@ -29,6 +29,13 @@ export interface Genre {
 export interface Keyword {
   id: string;
   label: string;
+  category: string;
+}
+
+export interface SessionInfo {
+  genre: string;
+  keywords: string[];
+  language: string;
 }
 
 export interface Language {

@@ -43,6 +43,7 @@ class RadioOrchestrator:
         self.genres: list[str] = []
         self.keywords: list[str] = []
         self.language: str = "en"             # ISO 639-1 code or "instrumental"
+        self.feeling: str = ""                # Free-text mood from user
         self.history: list[str] = []          # Song titles played this session
 
         # Track management
@@ -117,7 +118,7 @@ class RadioOrchestrator:
     # Public control methods
     # ------------------------------------------------------------------ #
 
-    async def start(self, genres: list[str], keywords: list[str], language: str = "en") -> None:
+    async def start(self, genres: list[str], keywords: list[str], language: str = "en", feeling: str = "") -> None:
         """Start a new radio session, stopping any existing one first."""
         if self._task and not self._task.done():
             logger.info("[radio] Stopping existing session before starting new one")
@@ -126,6 +127,7 @@ class RadioOrchestrator:
         self.genres = genres
         self.keywords = keywords
         self.language = language
+        self.feeling = feeling
         self.history = []
         self.next_track = None
         self._stop_event.clear()
@@ -135,7 +137,7 @@ class RadioOrchestrator:
         self._last_track_ended_at = 0.0  # Reset debounce for fresh session
         self._pending_promotion = False   # Clear any stale promotion from previous session
 
-        logger.info(f"[radio] Starting session — genres: {genres}, keywords: {keywords}, language: {language}")
+        logger.info(f"[radio] Starting session — genres: {genres}, keywords: {keywords}, language: {language}, feeling: {feeling[:50]!r}")
         self._task = asyncio.create_task(self._radio_loop(), name="radio-loop")
 
     async def stop(self) -> None:
@@ -189,7 +191,8 @@ class RadioOrchestrator:
     # ------------------------------------------------------------------ #
 
     async def start_from_ws(
-        self, ws: WebSocket, genres: list[str], keywords: list[str], language: str = "en"
+        self, ws: WebSocket, genres: list[str], keywords: list[str],
+        language: str = "en", feeling: str = "",
     ) -> None:
         """Start the radio session — authorised only for the current controller."""
         if ws != self._controller_ws:
@@ -203,7 +206,7 @@ class RadioOrchestrator:
                 ws, WSMessage(event="error", data={"message": "At least one genre is required"})
             )
             return
-        await self.start(genres, keywords, language)
+        await self.start(genres, keywords, language, feeling)
 
     async def stop_from_ws(self, ws: WebSocket) -> None:
         """Stop the radio session — authorised only for the current controller."""
@@ -519,6 +522,7 @@ class RadioOrchestrator:
         song_prompt: SongPrompt = await self.llm.generate_prompt(
             self.genres, self.keywords, self.history,
             duration=target_duration, language=self.language,
+            feeling=self.feeling,
         )
         logger.info(
             f"[radio] [{short_id}] LLM done in {time.monotonic() - t_llm:.1f}s — "

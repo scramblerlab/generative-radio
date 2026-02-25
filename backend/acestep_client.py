@@ -49,10 +49,13 @@ class ACEStepClient:
             "key_scale": prompt.key_scale,
             "audio_duration": prompt.duration,
             "vocal_language": ace_language,
-            "thinking": True,       # ACE-Step's internal LM-DiT enhanced quality mode
+            "thinking": True,           # Generates semantic audio codes (melody/orchestration) for DiT
+            "use_cot_caption": False,   # Don't rewrite our caption — we craft it via Ollama LLM
+            "use_cot_metas": False,     # Don't override our BPM/key/duration — already provided
+            "use_cot_language": False,   # Don't re-detect language — we pass it explicitly
             "batch_size": 1,
             "audio_format": "mp3",
-            "inference_steps": 8,   # Turbo: fast with good quality
+            "inference_steps": 8,       # Turbo: fast with good quality
             "use_random_seed": True,
         }
         logger.info(

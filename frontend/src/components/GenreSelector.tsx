@@ -1,8 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Genre, Keyword, Language } from '../types';
 
+const MOOD_CATEGORY_LABELS: Record<string, string> = {
+  energy: 'Energy',
+  emotion: 'Emotion',
+  atmosphere: 'Atmosphere',
+  texture: 'Texture',
+};
+
+const MOOD_CATEGORY_ORDER = ['energy', 'emotion', 'atmosphere', 'texture'];
+const FEELING_MAX_LENGTH = 200;
+
 interface GenreSelectorProps {
-  onStart: (genres: string[], keywords: string[], language: string) => void;
+  onStart: (genres: string[], keywords: string[], language: string, feeling: string) => void;
 }
 
 export function GenreSelector({ onStart }: GenreSelectorProps) {
@@ -12,6 +22,7 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
   const [selectedGenre, setSelectedGenre] = useState<string>('rock');
   const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(new Set());
   const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
+  const [feeling, setFeeling] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -31,6 +42,16 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
       });
   }, []);
 
+  const keywordsByCategory = useMemo(() => {
+    const grouped: Record<string, Keyword[]> = {};
+    for (const kw of keywords) {
+      const cat = kw.category || 'other';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(kw);
+    }
+    return grouped;
+  }, [keywords]);
+
   const selectGenre = (id: string) => {
     console.log('[GenreSelector] Genre selected:', id);
     setSelectedGenre(id);
@@ -47,8 +68,8 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
 
   const handleStart = () => {
     const keywordList = [...selectedKeywords];
-    console.log('[GenreSelector] Starting radio with:', selectedGenre, keywordList, selectedLanguage);
-    onStart([selectedGenre], keywordList, selectedLanguage);
+    console.log('[GenreSelector] Starting radio with:', selectedGenre, keywordList, selectedLanguage, feeling);
+    onStart([selectedGenre], keywordList, selectedLanguage, feeling);
   };
 
   if (loading) {
@@ -87,18 +108,27 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
 
       <section className="selector__section">
         <h2 className="selector__section-title">Set the mood <span className="optional">(optional)</span></h2>
-        <div className="keyword-row">
-          {keywords.map((k) => (
-            <button
-              key={k.id}
-              className={`keyword-chip ${selectedKeywords.has(k.id) ? 'keyword-chip--selected' : ''}`}
-              onClick={() => toggleKeyword(k.id)}
-              aria-pressed={selectedKeywords.has(k.id)}
-            >
-              {k.label}
-            </button>
-          ))}
-        </div>
+        {MOOD_CATEGORY_ORDER.map((cat) => {
+          const items = keywordsByCategory[cat];
+          if (!items || items.length === 0) return null;
+          return (
+            <div key={cat} className="mood-category">
+              <h3 className="mood-category__label">{MOOD_CATEGORY_LABELS[cat] ?? cat}</h3>
+              <div className="keyword-row">
+                {items.map((k) => (
+                  <button
+                    key={k.id}
+                    className={`keyword-chip ${selectedKeywords.has(k.id) ? 'keyword-chip--selected' : ''}`}
+                    onClick={() => toggleKeyword(k.id)}
+                    aria-pressed={selectedKeywords.has(k.id)}
+                  >
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </section>
 
       <section className="selector__section">
@@ -124,13 +154,32 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
         </div>
       </section>
 
+      <section className="selector__section">
+        <h2 className="selector__section-title">
+          How are you feeling today? <span className="optional">(optional)</span>
+        </h2>
+        <div className="feeling-input-wrapper">
+          <input
+            type="text"
+            className="feeling-input"
+            placeholder="e.g. Late night coding session, need focus..."
+            value={feeling}
+            onChange={(e) => setFeeling(e.target.value.slice(0, FEELING_MAX_LENGTH))}
+            maxLength={FEELING_MAX_LENGTH}
+          />
+          <span className="feeling-input__counter">
+            {feeling.length}/{FEELING_MAX_LENGTH}
+          </span>
+        </div>
+      </section>
+
       <div className="selector__footer">
         {selectedGenre && (
           <p className="selector__summary">
             {genres.find((g) => g.id === selectedGenre)?.label}
             {selectedKeywords.size > 0 && (
               <span className="selector__summary-keywords">
-                {' '}—{' '}
+                {' '}&mdash;{' '}
                 {[...selectedKeywords]
                   .map((id) => keywords.find((k) => k.id === id)?.label)
                   .filter(Boolean)
