@@ -131,7 +131,11 @@ LYRICS RULES:
 
 METADATA RULES:
 - BPM must match the genre and mood naturally
-- Duration must be exactly {target_duration} seconds"""
+- Duration must be exactly {target_duration} seconds
+
+OUTPUT RULES:
+- Do NOT use emojis or special Unicode characters in any field. Use only plain ASCII text.
+- All field values must be valid JSON strings — no unescaped quotes or control characters."""
 
         t0 = time.monotonic()
         try:
