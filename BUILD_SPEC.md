@@ -1,6 +1,9 @@
-# Generative Radio — AI-Generated Radio Web App: Full Build Specification
+# Generative Radio — Build Specification (v1)
 
-> **Purpose:** This document contains everything needed to build the "Generative Radio" web app from scratch on a Mac mini (Apple Silicon, 64GB RAM). It is designed to be self-contained — a single reference for an AI coding assistant to implement the entire project without needing to research external APIs.
+> **Snapshot date:** 2026-02-25
+> **Supersedes:** `BUILD_SPEC_V0.md` (initial build spec)
+>
+> This document describes the current state of the codebase — architecture, runtime behaviour, protocols, and implementation details — as a single reference for contributors and AI coding assistants.
 
 ---
 
@@ -8,142 +11,109 @@
 
 1. [Project Overview](#1-project-overview)
 2. [Architecture](#2-architecture)
-3. [Tech Stack & Versions](#3-tech-stack--versions)
+3. [Tech Stack & Dependencies](#3-tech-stack--dependencies)
 4. [Project Structure](#4-project-structure)
 5. [Prerequisites & Setup](#5-prerequisites--setup)
-6. [ACE-Step 1.5 REST API Reference](#6-ace-step-15-rest-api-reference)
-7. [Ollama LLM Integration Reference](#7-ollama-llm-integration-reference)
-8. [Backend Implementation Spec](#8-backend-implementation-spec)
-9. [Frontend Implementation Spec](#9-frontend-implementation-spec)
-10. [WebSocket Protocol](#10-websocket-protocol)
-11. [Launch Scripts](#11-launch-scripts)
-12. [macOS-Specific Configuration](#12-macos-specific-configuration)
-13. [Build Order & Task Checklist](#13-build-order--task-checklist)
+6. [Runtime Configuration](#6-runtime-configuration)
+7. [Backend Implementation](#7-backend-implementation)
+8. [Frontend Implementation](#8-frontend-implementation)
+9. [WebSocket Protocol](#9-websocket-protocol)
+10. [Multi-Listener: Controller / Viewer Model](#10-multi-listener-controller--viewer-model)
+11. [Audio Pipeline & Pre-fetching](#11-audio-pipeline--pre-fetching)
+12. [Language & Instrumental Support](#12-language--instrumental-support)
+13. [ACE-Step 1.5 API Reference](#13-ace-step-15-api-reference)
+14. [Ollama LLM Integration](#14-ollama-llm-integration)
+15. [Launch Scripts](#15-launch-scripts)
+16. [Memory, Duration & Performance](#16-memory-duration--performance)
+17. [Remote Access (Cloudflare Tunnel)](#17-remote-access-cloudflare-tunnel)
+18. [Debugging & Logging](#18-debugging--logging)
 
 ---
 
 ## 1. Project Overview
 
-**Generative Radio** is a fully local AI-generated radio web app. The user selects music genres and mood keywords, and the app continuously generates and plays original songs — like an endless AI radio station.
+**Generative Radio** is a fully local, offline AI radio web app. Users select a genre and mood keywords, and the app generates and plays an endless stream of original AI-composed songs — like a radio station where every track is unique.
 
-**Core loop:**
-1. User picks genres (e.g., "Indie Rock") and keywords (e.g., "Dreamy", "Melancholic")
-2. A local LLM (Ollama) acts as a "DJ brain" — generates creative song prompts with tags, lyrics, BPM, key
-3. The prompt is sent to ACE-Step 1.5 (local music generation model) which produces a full song
-4. The song plays in the browser
-5. While it plays, the next song is pre-generated in the background
-6. When the song ends, the next one plays immediately — seamless radio experience
-7. User can Stop, Play, or Skip at any time
+### Core Loop
 
-**Everything runs locally.** No cloud APIs, no subscriptions, no internet required after setup.
+1. User picks **one genre** and optional **mood keywords**
+2. User selects a **vocal language** (11 languages or instrumental)
+3. A local LLM (Ollama + Qwen3) acts as a "DJ brain" — generates a creative song prompt with tags, lyrics, BPM, key, and duration
+4. The prompt is sent to ACE-Step 1.5 (local music generation) which produces a full MP3
+5. The song plays in the browser with a live activity log
+6. While it plays, the **next song is pre-generated** in the background
+7. When the song ends, the next one plays seamlessly — the frontend pre-fetches audio bytes into a blob URL for zero-latency transition
+8. Cycle repeats until the controller stops the session
+
+**Everything runs locally.** No cloud APIs required after initial setup.
+
+### Multi-Listener Model
+
+Multiple browser clients can connect simultaneously. The first connection becomes the **controller** (full UI: genre selection, start/stop/skip). All subsequent connections are **viewers** (read-only player, real-time audio sync). When the controller disconnects, the next viewer is promoted.
 
 ---
 
 ## 2. Architecture
 
-```
-┌─────────────────────────────────────────────────┐
-│  Web Browser (React + Vite, TypeScript)         │
-│                                                 │
-│  ┌──────────────┐  ┌────────────────────────┐   │
-│  │ Genre/Keyword │  │ Radio Player           │   │
-│  │ Selector     │  │  - <audio> element      │   │
-│  │              │  │  - Play / Stop / Skip   │   │
-│  └──────┬───────┘  │  - Now Playing display  │   │
-│         │          │  - Status bar           │   │
-│         │          └──────────┬──────────────┘   │
-└─────────┼─────────────────────┼──────────────────┘
-          │ REST                │ WebSocket
-          │ POST /api/radio/*   │ ws://localhost:5555/ws
-          │                     │
-┌─────────▼─────────────────────▼──────────────────┐
-│  Python Backend (FastAPI) — port 5555            │
-│                                                  │
-│  ┌─────────────────────────────────────────┐     │
-│  │ Radio Orchestrator (async background)   │     │
-│  │  - Manages radio session state          │     │
-│  │  - Pre-buffer: generates next song      │     │
-│  │    while current one plays              │     │
-│  │  - Tracks session history for variety   │     │
-│  └────────┬────────────────────┬───────────┘     │
-│           │                    │                  │
-│  ┌────────▼──────┐   ┌────────▼──────────┐       │
-│  │ Ollama Client │   │ ACE-Step Client   │       │
-│  │ (llm.py)     │   │ (acestep_client)  │       │
-│  └────────┬──────┘   └────────┬──────────┘       │
-└───────────┼────────────────────┼─────────────────┘
-            │                    │
-   ┌────────▼──────┐   ┌────────▼──────────────┐
-   │ Ollama Server │   │ ACE-Step 1.5 API     │
-   │ port 11434   │   │ port 8001            │
-   │ Model:       │   │ MLX backend (macOS)  │
-   │ qwen3:8b or  │   │ Turbo model, 8 steps │
-   │ qwen3:14b*   │   │                      │
-   └───────────────┘   └──────────────────────┘
-   * auto-selected by config.py based on unified memory
+```mermaid
+graph TD
+    subgraph Browser["Web Browser · React 19 + Vite 6 + TypeScript 5"]
+        GS["GenreSelector<br/><i>(controller only)</i>"]
+        RP["RadioPlayer<br/>- audio with blob pre-fetch<br/>- Equalizer, progress bar<br/>- Activity log<br/>- Viewer list (controller)<br/>- StatusBar + listener count"]
+    end
+
+    subgraph Backend["Python Backend · FastAPI · port 5555"]
+        RO["RadioOrchestrator<br/>- Async radio loop with pre-buffering<br/>- Controller/viewer role management<br/>- track_ended debouncing<br/>- Progressive duration ramping ≥48 GB<br/>- In-memory audio cache with eviction"]
+        OC["OllamaClient<br/><i>llm.py</i><br/>Structured JSON via Qwen3"]
+        AC["ACEStepClient<br/><i>acestep_client.py</i><br/>submit → poll → download"]
+        RO --> OC
+        RO --> AC
+    end
+
+    subgraph External["External Services"]
+        Ollama["Ollama Server<br/>port 11434<br/>qwen3:8b"]
+        ACEStep["ACE-Step 1.5 API<br/>port 8001<br/>MLX backend · Turbo · 8 steps"]
+    end
+
+    GS -- "REST GET /api/genres" --> Backend
+    RP -- "WebSocket /ws<br/>(all control)" --> Backend
+    GS -- "WS: start event" --> Backend
+    Browser -- "GET /api/audio/{id}" --> Backend
+    OC --> Ollama
+    AC --> ACEStep
 ```
 
-### Data Flow (Radio Loop)
+### Data Flow (One Song Cycle)
 
-```
-[User clicks PLAY with "Jazz" + "Chill" selected]
-        │
-        ▼
-[FastAPI receives POST /api/radio/start]
-        │
-        ▼
-[Radio Orchestrator starts async loop]
-        │
-        ▼
-[Ollama LLM generates structured prompt]
-  Input:  genres=["Jazz"], keywords=["Chill"], history=[...]
-  Output: {tags: "smooth jazz, mellow saxophone, soft piano, chill vibes",
-           lyrics: "[verse]\nMoonlight falls on city streets...",
-           bpm: 85, key_scale: "Bb Major", duration: 90,
-           song_title: "Midnight Boulevard"}
-        │
-        ▼
-[ACE-Step API: POST /release_task]
-  Input:  {prompt: "smooth jazz, mellow saxophone...",
-           lyrics: "[verse]\nMoonlight falls...",
-           bpm: 85, key_scale: "Bb Major",
-           audio_duration: 90, thinking: true,
-           batch_size: 1, audio_format: "mp3"}
-  Output: {task_id: "abc-123"}
-        │
-        ▼
-[Poll: POST /query_result every 2s until status=1]
-  Output: {status: 1, result: [{file: "/v1/audio?path=..."}]}
-        │
-        ▼
-[WebSocket → Browser: track_ready event with track metadata + audio URL]
-        │
-        ▼
-[Browser plays audio via <audio> element]
-[Simultaneously: Orchestrator starts generating NEXT song]
-        │
-        ▼
-[Browser fires "track_ended" via WebSocket]
-        │
-        ▼
-[Next pre-generated track plays immediately]
-[Cycle repeats...]
+```mermaid
+flowchart TD
+    A["Controller selects Jazz + Chill + English,<br/>clicks Start Radio"] --> B["WS: { event: start,<br/>data: { genres: [jazz], keywords: [chill], language: en } }"]
+    B --> C["RadioOrchestrator.start()<br/>begins async radio loop"]
+    C --> D["OllamaClient.generate_prompt()<br/>structured JSON via Qwen3<br/><i>Broadcasts: llm_thinking → llm_done</i>"]
+    D --> E["ACEStepClient.generate_song()<br/>submit → poll → download<br/><i>Broadcasts: acestep_start → acestep_progress → acestep_done</i>"]
+    E --> F["Audio bytes cached in memory<br/>TrackInfo broadcast to all clients<br/>WS: track_ready (isNext: false)"]
+    F --> G["All browsers play audio<br/>Orchestrator starts pre-generating NEXT song"]
+    G --> H["Next song ready<br/>WS: track_ready (isNext: true)<br/>Frontend pre-fetches audio into blob URL"]
+    H --> I["Current track ends<br/>Frontend plays blob URL instantly<br/>Sends track_ended via WS"]
+    I --> J["Orchestrator swaps tracks<br/>Evicts old audio cache<br/>Starts next pre-generation"]
+    J --> D
 ```
 
 ---
 
-## 3. Tech Stack & Versions
+## 3. Tech Stack & Dependencies
 
 | Component | Technology | Version / Notes |
 |---|---|---|
-| **Frontend** | React + Vite + TypeScript | React 19, Vite 6+, TS 5+ |
-| **Backend** | Python FastAPI | Python 3.11-3.12, FastAPI 0.115+ |
-| **LLM** | Ollama + qwen3:8b / qwen3:14b | Ollama latest; 8b (~5.2GB) on ≤24GB machines, 14b (~9.3GB) on 32GB+ machines; auto-selected at runtime |
-| **Music Gen** | ACE-Step 1.5 | GitHub repo, `acestep-api` command |
-| **Package Mgmt** | uv (Python), npm (JS) | uv for ACE-Step & backend |
-| **Audio Format** | MP3 (default) | Also supports WAV, FLAC |
+| **Frontend** | React + Vite + TypeScript | React 19, Vite 6, TS 5.7+ |
+| **Backend** | Python FastAPI | Python 3.11–3.12, FastAPI 0.115+ |
+| **LLM** | Ollama + qwen3:8b | Always 8b (~5.2 GB); sufficient for prompt generation |
+| **Music Gen** | ACE-Step 1.5 | MLX backend, turbo model, 8 inference steps |
+| **Package Mgmt** | uv (Python / ACE-Step), pip (backend venv), npm (JS) | |
+| **Audio Format** | MP3 | Generated by ACE-Step, served via chunked streaming |
+| **Tunnel** | cloudflared (optional) | Cloudflare Quick Tunnel on port 5173 |
 
-### Python Dependencies (backend/requirements.txt)
+### Python Dependencies (`backend/requirements.txt`)
 
 ```
 fastapi>=0.115.0
@@ -151,9 +121,10 @@ uvicorn[standard]>=0.32.0
 ollama>=0.5.1
 httpx>=0.27.0
 pydantic>=2.0.0
+psutil>=6.0.0
 ```
 
-### Node Dependencies (frontend/package.json)
+### Node Dependencies (`frontend/package.json`)
 
 ```json
 {
@@ -176,132 +147,568 @@ pydantic>=2.0.0
 ## 4. Project Structure
 
 ```
-radio/
+generative-radio/
 ├── backend/
-│   ├── main.py                # FastAPI app: REST endpoints, WebSocket, CORS, startup
-│   ├── radio.py               # RadioOrchestrator: async loop, pre-buffering, state machine
-│   ├── llm.py                 # OllamaClient: prompt generation with structured output
-│   ├── acestep_client.py      # ACEStepClient: task submission, polling, audio retrieval
-│   ├── models.py              # Pydantic models for API requests/responses & LLM output
-│   ├── genres.py              # Genre and keyword definitions (static data)
-│   ├── config.py              # Runtime config: Apple Silicon memory detection, model auto-selection
+│   ├── main.py                # FastAPI app: REST endpoints, WebSocket handler, CORS, lifespan
+│   ├── radio.py               # RadioOrchestrator: async loop, pre-buffering, controller/viewer roles
+│   ├── llm.py                 # OllamaClient: multi-language prompt generation with structured output
+│   ├── acestep_client.py      # ACEStepClient: task submission, polling, audio download pipeline
+│   ├── models.py              # Pydantic models: SongPrompt, TrackInfo, RadioState, WSMessage
+│   ├── genres.py              # Genre, keyword, and language definitions (static data)
+│   ├── config.py              # Runtime config: memory detection, model selection, duration tiers, mem_snapshot()
 │   └── requirements.txt       # Python dependencies
 ├── frontend/
-│   ├── index.html             # HTML entry point
+│   ├── index.html             # HTML entry point (📻 emoji favicon)
 │   ├── package.json           # Node dependencies
-│   ├── tsconfig.json          # TypeScript config
-│   ├── vite.config.ts         # Vite config (proxy to backend)
+│   ├── tsconfig.json          # TypeScript project references
+│   ├── tsconfig.app.json      # App TypeScript config
+│   ├── tsconfig.node.json     # Node TypeScript config
+│   ├── vite.config.ts         # Vite config: proxy /api→:5555, /ws→ws://:5555, allowedHosts
 │   └── src/
-│       ├── main.tsx           # React entry point
-│       ├── App.tsx            # Main layout: GenreSelector → RadioPlayer
-│       ├── App.css            # Global styles (dark theme, radio aesthetic)
-│       ├── types.ts           # Shared TypeScript types
+│       ├── main.tsx           # React entry point (StrictMode)
+│       ├── App.tsx            # Root: role-aware routing (controller/viewer/connecting)
+│       ├── App.css            # Full stylesheet: dark theme, genre grid, player, equalizer, status bar
+│       ├── types.ts           # TypeScript types: Track, Genre, Keyword, Language, WS messages, roles
 │       ├── components/
-│       │   ├── GenreSelector.tsx   # Genre grid + keyword mood chips
-│       │   ├── RadioPlayer.tsx     # Audio player, Play/Stop/Skip, Now Playing
-│       │   └── StatusBar.tsx       # Generation progress / status indicator
+│       │   ├── GenreSelector.tsx   # Single-genre select + keyword chips + language picker
+│       │   ├── RadioPlayer.tsx     # Player card, activity log, viewer list, autoplay-unblock
+│       │   └── StatusBar.tsx       # Status dot + message + spinner + listener count
 │       └── hooks/
-│           └── useRadio.ts        # WebSocket hook, radio state machine
+│           └── useRadio.ts        # WebSocket lifecycle, audio blob pre-fetch, role state, reconnect
 ├── scripts/
-│   ├── setup.sh               # One-time: install Ollama, pull model, clone ACE-Step
-│   └── start.sh               # Launch all 3 services (Ollama, ACE-Step API, FastAPI backend)
+│   ├── setup.sh               # One-time: Homebrew, Ollama, LLM models, ACE-Step, venv, npm install
+│   └── start.sh               # Launch: Ollama, ACE-Step, backend, frontend, cloudflared
+├── docs/
+│   ├── acestep-memory-vs-duration.md     # Memory vs. duration research and formulas
+│   ├── multi-listener-controller-viewer.md  # Controller/viewer design document
+│   └── multiple-github-accounts-mac.md   # SSH key setup for multi-account GitHub
 ├── BUILD_SPEC.md              # This file
+├── BUILD_SPEC_V0.md           # Original build spec (superseded)
+├── README.md                  # User-facing setup & usage
 ├── research-local-ai-music-generation-mac.md  # Background research
-└── README.md                  # User-facing setup & usage instructions
+└── .gitignore
 ```
 
 ---
 
 ## 5. Prerequisites & Setup
 
-### Hardware
+### Hardware Requirements
 
-- Mac mini with Apple Silicon (M1/M2/M3/M4)
-- 64GB unified memory
-- 50GB+ free SSD space (for models)
+- Mac with Apple Silicon (M1/M2/M3/M4)
+- macOS 14+
+- 16 GB+ unified memory (24 GB+ recommended for development, 64 GB for production)
+- 50 GB+ free SSD space
 
-### Software Prerequisites
+### One-Time Setup
 
 ```bash
-# 1. Homebrew
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# 2. Core tools
-brew install python@3.11 node git git-lfs ffmpeg
-
-# 3. uv (Python package manager — used by ACE-Step)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 4. Ollama (local LLM server)
-brew install ollama
-
-# 5. Pull the LLM models
-# qwen3:8b  (~5.2GB) — used automatically on machines with <32GB unified memory (e.g. dev machine)
-# qwen3:14b (~9.3GB) — used automatically on machines with 32GB+ unified memory (e.g. Mac Mini)
-ollama pull qwen3:8b
-ollama pull qwen3:14b
-
-# 6. Clone ACE-Step 1.5 (as a sibling directory or wherever you prefer)
-cd /path/to/projects
-git clone https://github.com/ACE-Step/ACE-Step-1.5.git
-cd ACE-Step-1.5
-uv sync
-# First run will download model weights (~several GB, takes ~40 min)
-
-# 7. Enable git-lfs
-git lfs install
+./scripts/setup.sh
 ```
 
-### Environment Variables for macOS
+`setup.sh` performs 7 steps:
 
-Add to `~/.zshrc`:
+1. **Homebrew** — installs if missing
+2. **System tools** — `python@3.11`, `node`, `ffmpeg`, `git-lfs`, `cloudflared`
+3. **uv** — Python package manager (used by ACE-Step)
+4. **Ollama** — local LLM server; pulls both `qwen3:8b` and `qwen3:14b` (temporarily starts Ollama server if needed)
+5. **ACE-Step 1.5** — clones to sibling directory `../ACE-Step-1.5`, runs `uv sync`
+6. **Backend** — creates `backend/.venv` Python venv, installs `requirements.txt`
+7. **Frontend** — runs `npm install` in `frontend/`
+
+### Environment Variables
 
 ```bash
-# Allow PyTorch MPS to use all available unified memory
+# Add to ~/.zshrc for optimal MPS performance
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
-
-# Fall back to CPU for unsupported MPS operations
 export PYTORCH_ENABLE_MPS_FALLBACK=1
+```
+
+(`start.sh` also sets these at launch time.)
+
+---
+
+## 6. Runtime Configuration
+
+### `config.py` — Resolved at Process Startup
+
+All configuration is determined once when the backend starts, based on the machine's unified memory.
+
+#### LLM Model Selection
+
+**Always `qwen3:8b`** (~5.2 GB). The smaller model frees memory for ACE-Step's MLX VAE Metal buffers, which is the primary performance bottleneck.
+
+Overridable via `OLLAMA_MODEL` environment variable.
+
+#### Audio Duration Tiers
+
+Duration is selected based on unified memory and, on large-memory machines, ramps up progressively per track:
+
+| Unified Memory | Duration Strategy | Rationale |
+|---|---|---|
+| ≤ 32 GB | **30 s** (all tracks) | Fast iteration on dev machines |
+| 33–47 GB | **60 s** (all tracks) | Safe within MLX VAE Metal buffer limits |
+| ≥ 48 GB | **Progressive ramp:** 60 s → 120 s → 180 s | First track starts quickly; subsequent tracks get longer |
+
+Progressive ramp (≥ 48 GB only):
+
+| Track Index | Duration |
+|---|---|
+| 0 (first) | 60 s |
+| 1 (second) | 120 s |
+| 2+ (third onward) | 180 s |
+
+Overridable via `MAX_DURATION_S` environment variable (disables progressive ramp).
+
+#### Memory Monitoring
+
+`mem_snapshot()` returns a one-line string for log messages:
+
+```
+RAM 18.2/24GB (76% used, 5.8GB free)
+RAM 23.1/24GB (96% used, 0.9GB free) | ⚠ Swap: 2.4GB
+```
+
+Logged before and after each LLM and ACE-Step call.
+
+---
+
+## 7. Backend Implementation
+
+### `models.py` — Data Models
+
+```python
+class RadioState(str, Enum):
+    IDLE = "idle"
+    GENERATING = "generating"
+    PLAYING = "playing"
+    BUFFERING = "buffering"
+    STOPPED = "stopped"
+
+class SongPrompt(BaseModel):
+    song_title: str
+    tags: str           # Comma-separated ACE-Step style tags
+    lyrics: str         # [verse], [chorus], [bridge] markers; empty string for instrumental
+    bpm: int            # 60–200
+    key_scale: str      # e.g. "C Major", "Am", "F# Minor"
+    duration: int       # 30–MAX_DURATION_S (clamped by field_validator)
+
+class TrackInfo(BaseModel):
+    id: str             # UUID
+    song_title: str
+    tags: str
+    lyrics: str
+    bpm: int
+    key_scale: str
+    duration: int
+    audio_url: str      # /api/audio/{id}
+
+class WSMessage(BaseModel):
+    event: str
+    data: dict
+```
+
+`SongPrompt.duration` has a `field_validator` that hard-caps the value at `MAX_DURATION_S` as a safety net against LLM output that ignores the prompt instruction.
+
+### `genres.py` — Static Data
+
+- **12 genres** with icon, label, and 5 subgenres each: Rock, Pop, Jazz, Electronic, Hip-Hop, Classical, Lo-Fi, Ambient, R&B, Folk, Metal, Country
+- **15 mood keywords**: Energetic, Melancholic, Dreamy, Aggressive, Chill, Upbeat, Dark, Romantic, Ethereal, Groovy, Epic, Nostalgic, Minimal, Psychedelic, Cinematic
+- **12 language options**: English, Español, Français, Deutsch, Italiano, 中文, Ελληνικά, Suomi, Svenska, 日本語, 한국어, No Vocal (instrumental)
+
+### `llm.py` — OllamaClient
+
+- Wraps `ollama.chat()` in `asyncio.to_thread()` to avoid blocking the event loop
+- Generates `SongPrompt` via structured output (`format=SongPrompt.model_json_schema()`)
+- `think=False` — disables Qwen3 chain-of-thought (unnecessary latency for JSON generation)
+- System prompt includes: genres, keywords, language rules, session history (last 10 titles), target duration
+- Language-aware: lyrics instruction changes based on selected language; instrumental mode sets lyrics to empty string
+- Supports env var override: `OLLAMA_MODEL`
+
+### `acestep_client.py` — ACEStepClient
+
+Full async pipeline using `httpx.AsyncClient`:
+
+1. **`submit_task(prompt, vocal_language)`** → `POST /release_task` → returns `task_id`
+   - Maps `prompt.tags` → ACE-Step `prompt` field
+   - Maps `"instrumental"` language sentinel → `"unknown"` for ACE-Step
+   - Fixed params: `thinking=true`, `batch_size=1`, `audio_format="mp3"`, `inference_steps=8`
+2. **`poll_task(task_id)`** → `POST /query_result` every 2s, up to 5-minute timeout
+   - **Important:** ACE-Step `result` field is a JSON string that must be `json.loads()`-parsed a second time
+3. **`get_audio_bytes(audio_path)`** → `GET /v1/audio?path=...` → returns raw MP3 bytes
+4. **`generate_song(prompt)`** → orchestrates submit → poll → download → returns `(bytes, metadata)`
+
+### `radio.py` — RadioOrchestrator
+
+The central state machine managing the radio session:
+
+**State management:**
+- `state: RadioState` — IDLE → GENERATING → PLAYING ↔ BUFFERING → STOPPED
+- `genres`, `keywords`, `language` — session configuration
+- `history: list[str]` — last 20 song titles (passed to LLM for variety)
+- `current_track`, `next_track` — TrackInfo instances
+- `audio_cache: dict[str, bytes]` — in-memory MP3 cache, evicts previous track on transition
+
+**Async primitives:**
+- `_task` — main radio loop (`asyncio.Task`)
+- `_prebuffer_task` — background next-track generation
+- `_stop_event`, `_track_ended_event`, `_next_track_ready_event` — coordination events
+
+**Controller/viewer role tracking:**
+- `_controller_ws` — the one WebSocket that can start/stop/skip
+- `_pending_promotion` — deferred promotion flag when controller disconnects mid-generation
+- `_ws_meta` — per-connection metadata (IP, connected_at) for the viewer list
+
+**Key behaviours:**
+- **Pre-buffering:** while a track plays, the next track is generated in the background and broadcast as `track_ready(isNext=true)`
+- **track_ended debouncing:** with N listeners, only the first `track_ended` within 5 seconds is honoured
+- **Progressive duration:** `get_progressive_duration(track_index)` returns the target duration for each track
+- **Progress broadcasting:** 5-stage progress events during generation (see §9)
+- **Graceful cleanup:** `stop()` cancels prebuffer tasks, clears audio cache, resets all state
+
+### `main.py` — FastAPI Application
+
+**REST endpoints (read-only):**
+- `GET /api/genres` — returns genre, keyword, and language lists
+- `GET /api/radio/status` — current state, track info, listener count, model name
+- `GET /api/audio/{track_id}` — serves cached MP3 via `StreamingResponse` (64 KB chunks, `Cache-Control: public, max-age=3600`)
+
+**WebSocket endpoint (`/ws`):**
+- Accepts connection → `radio.add_ws(websocket)`
+- Routes incoming events: `start`, `stop`, `skip`, `track_ended`
+- On disconnect → `radio.remove_ws(websocket)`
+
+**Lifespan:** logs startup config; on shutdown calls `radio.stop()` and `acestep.close()`.
+
+---
+
+## 8. Frontend Implementation
+
+### Design System
+
+- **Theme:** Deep dark (#0a0a0f background), warm amber (#f59e0b accent), indigo for keywords, green for language chips
+- **Layout:** Centered single-column, max-width 600px (selector) / 480px (player)
+- **Typography:** System fonts (-apple-system, BlinkMacSystemFont, etc.)
+- **Animations:** CSS equalizer bars, status dot pulse, activity log fade-in, progress bar transition
+
+### `App.tsx` — Root Component
+
+Role-aware routing:
+
+| `role` value | `radio.status` | View rendered |
+|---|---|---|
+| `null` | any | "Connecting..." spinner |
+| `"viewer"` | any | `<RadioPlayer readonly>` (always) |
+| `"controller"` | idle/stopped | `<GenreSelector>` |
+| `"controller"` | generating/playing/buffering | `<RadioPlayer>` (full controls) |
+
+When a viewer is promoted to controller mid-session, a `useEffect` automatically switches to the player view.
+
+### `GenreSelector.tsx`
+
+- **Single-select genre grid** (3 columns, 2 on mobile) — one genre at a time, default: Rock
+- **Multi-select keyword chips** (pill-shaped, wrap) — optional mood modifiers
+- **Single-select language row** — 11 languages + "No Vocal" (instrumental, dashed border)
+- **Summary line** shows selection: `"Rock — Dreamy, Chill · English"`
+- **Start Radio button** — enabled when a genre is selected
+
+### `RadioPlayer.tsx`
+
+Two modes based on `readonly` prop:
+
+| Element | Controller | Viewer |
+|---|---|---|
+| "← Change genres" back button | Shown | Hidden |
+| "CONTROLLER" badge | Shown | Hidden |
+| "Now Listening" badge | Hidden | Shown |
+| Invite text + viewer list | Shown | Hidden |
+| "Tap to Listen" (autoplay blocked) | N/A | Shown when needed |
+| Track info, equalizer, progress | Same | Same |
+| Activity log | Same (during generating/buffering) | Same |
+| StatusBar | Same | Same |
+
+**Activity log:** shows the last 8 progress entries with stage-specific icons (🎙 🎵 🎹 ⏳ ✓), auto-scrolls to bottom.
+
+**Viewer list (controller only):** shows connected viewer IPs (abbreviated for IPv6) and "listening since" timestamps.
+
+### `StatusBar.tsx`
+
+- Status dot: green (playing + next ready), amber pulsing (generating/buffering/playing without next), dim (idle/stopped)
+- Message: contextual status text
+- Spinner: shown during generating/buffering
+- Listener count: people icon + count (shown when > 0)
+
+### `useRadio.ts` — Core Hook
+
+**State exposed:**
+
+```typescript
+interface UseRadioReturn {
+  role: ClientRole | null;      // "controller" | "viewer" | null (connecting)
+  status: RadioStatus;          // "idle" | "connecting" | "generating" | "playing" | "buffering" | "stopped"
+  currentTrack: Track | null;
+  nextReady: boolean;
+  statusMessage: string;
+  errorMessage: string | null;
+  activityLog: ActivityEntry[];
+  listenerCount: number;
+  audioBlocked: boolean;        // true when browser blocks autoplay (viewer)
+  viewers: ViewerInfo[];        // controller-only: connected viewer metadata
+  progress: number;             // 0–1 audio playback progress
+  start(genres, keywords, language): Promise<void>;
+  stop(): Promise<void>;
+  rewind(): void;
+  unblockAudio(): void;
+  audioRef: RefObject<HTMLAudioElement>;
+}
+```
+
+**WebSocket lifecycle:**
+- Connects on mount, reconnects on close with exponential backoff (1s → 2s → 4s → ... → 16s max)
+- StrictMode-safe: only the current socket can trigger reconnection
+- Relative URL `/ws` — proxied by Vite in dev, works natively behind tunnel
+
+**Audio blob pre-fetching:**
+- When `track_ready(isNext=true)` arrives, `fetch()` downloads the MP3 bytes and creates a `URL.createObjectURL(blob)`
+- When the current track ends, audio.src is set to the blob URL for instant playback
+- Previous blob URLs are revoked to prevent memory leaks
+
+**iOS autoplay unlock:**
+- `start()` synchronously calls `audio.play()` (muted) then `audio.pause()` within the user gesture handler
+- This unlocks the `<audio>` element for future `play()` calls from WebSocket callbacks
+
+---
+
+## 9. WebSocket Protocol
+
+### Connection
+
+```
+ws://localhost:5555/ws   (direct)
+/ws                      (via Vite proxy or tunnel)
+```
+
+### Client → Server Events
+
+All control is WebSocket-only. REST start/stop/skip endpoints do not exist.
+
+```json
+{ "event": "start", "data": { "genres": ["jazz"], "keywords": ["chill"], "language": "en" } }
+{ "event": "stop" }
+{ "event": "skip" }
+{ "event": "track_ended" }
+```
+
+- `start`, `stop`, `skip` are **controller-only** — non-controllers receive an `error` event
+- `track_ended` is sent by **all clients** — server debounces duplicates (5s window)
+
+### Server → Client Events
+
+#### `role_assigned` (unicast)
+
+Sent to individual clients on connect or promotion. Never broadcast.
+
+```json
+{ "event": "role_assigned", "data": { "role": "controller" } }
+{ "event": "role_assigned", "data": { "role": "viewer" } }
+```
+
+#### `track_ready` (broadcast)
+
+```json
+{
+  "event": "track_ready",
+  "data": {
+    "track": {
+      "id": "a1b2c3d4-...",
+      "songTitle": "Midnight Boulevard",
+      "tags": "smooth jazz, mellow saxophone, soft piano",
+      "lyrics": "[verse]\nMoonlight falls on city streets...",
+      "bpm": 85,
+      "keyScale": "Bb Major",
+      "duration": 60,
+      "audioUrl": "/api/audio/a1b2c3d4-..."
+    },
+    "isNext": false
+  }
+}
+```
+
+- `isNext: false` — play this track now (first track, or buffering-recovery)
+- `isNext: true` — pre-buffer this track (frontend pre-fetches audio bytes)
+
+#### `status` (broadcast)
+
+```json
+{
+  "event": "status",
+  "data": {
+    "state": "playing",
+    "message": "Playing — next track ready",
+    "nextReady": true
+  }
+}
+```
+
+#### `progress` (broadcast)
+
+Emitted during track generation to populate the activity log:
+
+```json
+{ "event": "progress", "data": { "stage": "llm_thinking", "message": "DJ is writing the next song prompt…" } }
+{ "event": "progress", "data": { "stage": "llm_done", "message": "\"Midnight Boulevard\" · 85 BPM · Bb Major", "title": "...", "tags": "...", "bpm": 85, "key": "Bb Major", "llmSeconds": 3.2 } }
+{ "event": "progress", "data": { "stage": "acestep_start", "message": "Composing \"Midnight Boulevard\"…", "title": "..." } }
+{ "event": "progress", "data": { "stage": "acestep_progress", "message": "Still composing \"Midnight Boulevard\"… (30s)", "elapsed": 30 } }
+{ "event": "progress", "data": { "stage": "acestep_done", "message": "\"Midnight Boulevard\" ready in 45s — loading…", "title": "...", "aceSeconds": 45.1 } }
+```
+
+Stages: `llm_thinking` → `llm_done` → `acestep_start` → `acestep_progress` (every 15s) → `acestep_done`
+
+#### `listener_count` (broadcast)
+
+```json
+{ "event": "listener_count", "data": { "count": 3 } }
+```
+
+Broadcast whenever a client connects or disconnects.
+
+#### `viewer_list` (unicast to controller)
+
+```json
+{
+  "event": "viewer_list",
+  "data": {
+    "viewers": [
+      { "ip": "192.168.1.42", "connectedAt": 1740000000 }
+    ]
+  }
+}
+```
+
+Sent only to the controller when the viewer list changes.
+
+#### `error` (broadcast or unicast)
+
+```json
+{ "event": "error", "data": { "message": "Only the host can start the radio" } }
 ```
 
 ---
 
-## 6. ACE-Step 1.5 REST API Reference
+## 10. Multi-Listener: Controller / Viewer Model
 
-ACE-Step 1.5 provides an async HTTP API via `acestep-api` (default port 8001).
+### Role Assignment
 
-### Starting the API Server (macOS)
+| Connection | Role | UI |
+|---|---|---|
+| First WebSocket | Controller | GenreSelector → RadioPlayer (full controls) |
+| All subsequent | Viewer | RadioPlayer (read-only, always) |
+
+### Late-Join State Sync
+
+When a viewer connects while a session is active, the server immediately unicasts:
+1. `role_assigned: viewer`
+2. `track_ready(isNext: false)` — current track metadata (if playing)
+3. `status` — current state + message
+
+### Controller Promotion
+
+When the controller disconnects:
+
+| Server state | Promotion timing |
+|---|---|
+| IDLE / STOPPED / PLAYING (no prebuffer) | Immediate — first viewer is promoted |
+| GENERATING / BUFFERING (prebuffer running) | Deferred — promoted after current generation finishes |
+
+After promotion:
+- Promoted client receives `role_assigned: controller`
+- Their UI transitions from read-only to full controls (already showing RadioPlayer)
+- Other viewers are unaffected
+
+If no viewers remain when the controller disconnects, `_controller_ws = None` and the next connection becomes controller.
+
+### IP Normalization
+
+IPv6-mapped IPv4 addresses are normalized: `::ffff:192.168.1.42` → `192.168.1.42`, `::1` → `127.0.0.1`.
+
+---
+
+## 11. Audio Pipeline & Pre-fetching
+
+### Server-Side
+
+1. LLM generates `SongPrompt` → ACE-Step generates MP3 bytes
+2. Bytes stored in `RadioOrchestrator.audio_cache[track_id]`
+3. `GET /api/audio/{track_id}` serves bytes via `StreamingResponse` (64 KB chunks)
+4. `Cache-Control: public, max-age=3600` allows browser-side caching
+5. Previous track's bytes are evicted from cache on transition
+
+### Client-Side Pre-fetching
+
+1. Server broadcasts `track_ready(isNext: true)` with the next track's metadata
+2. Frontend immediately `fetch()`es the audio URL and creates a `URL.createObjectURL(blob)`
+3. When the current track ends, `audio.src = blobUrl` — **zero network wait**
+4. If pre-fetch hasn't completed, falls back to direct backend URL
+5. Blob URLs are revoked after use to prevent memory leaks
+
+### Autoplay Handling
+
+- **Controllers:** `start()` fires a silent play/pause on the `<audio>` element within the button click handler to unlock autoplay on iOS
+- **Viewers:** if `audio.play()` throws `NotAllowedError`, a "Tap to Listen" button is shown; clicking it resumes from the beginning
+
+---
+
+## 12. Language & Instrumental Support
+
+### Supported Languages
+
+| Code | Label | LLM Behaviour |
+|---|---|---|
+| `en` | English | Lyrics in English |
+| `es` | Español | Lyrics in Spanish |
+| `fr` | Français | Lyrics in French |
+| `de` | Deutsch | Lyrics in German |
+| `it` | Italiano | Lyrics in Italian |
+| `zh` | 中文 | Lyrics in Chinese (Mandarin) |
+| `el` | Ελληνικά | Lyrics in Greek |
+| `fi` | Suomi | Lyrics in Finnish |
+| `sv` | Svenska | Lyrics in Swedish |
+| `ja` | 日本語 | Lyrics in Japanese |
+| `ko` | 한국어 | Lyrics in Korean |
+| `instrumental` | No Vocal | Lyrics set to empty string; tags include "no vocals" |
+
+### How Language Flows Through the System
+
+1. **Frontend:** user selects language in GenreSelector → sent in WS `start` event
+2. **RadioOrchestrator:** stores `self.language`, passes to LLM and ACE-Step
+3. **LLM (`llm.py`):** system prompt instructs "Write all lyrics in {Language}" or "INSTRUMENTAL TRACK — set lyrics to empty string"
+4. **ACE-Step (`acestep_client.py`):** `vocal_language` parameter set to ISO code; `"instrumental"` mapped to `"unknown"` (ACE-Step's auto-detect sentinel)
+
+---
+
+## 13. ACE-Step 1.5 API Reference
+
+### Starting the Server (macOS)
 
 ```bash
 cd /path/to/ACE-Step-1.5
-
-# Option A: Use the macOS-specific launch script (recommended)
-chmod +x start_api_server_macos.sh
-./start_api_server_macos.sh
-
-# Option B: Direct command
-ACESTEP_LM_BACKEND=mlx TOKENIZERS_PARALLELISM=false uv run acestep-api --host 127.0.0.1 --port 8001
+ACESTEP_LM_BACKEND=mlx TOKENIZERS_PARALLELISM=false \
+  uv run acestep-api --host 127.0.0.1 --port 8001
 ```
 
-The macOS script sets `ACESTEP_LM_BACKEND=mlx` for native Apple Silicon acceleration.
+### Endpoints Used
 
-### API Endpoints
-
-#### POST /release_task — Submit a Generation Task
-
-Creates an async music generation job. Returns a `task_id` for polling.
-
-**Request (JSON):**
+#### POST /release_task — Submit Generation
 
 ```json
 {
-  "prompt": "smooth jazz, mellow saxophone, soft piano, chill vibes, nightclub atmosphere",
-  "lyrics": "[verse]\nMoonlight falls on city streets\nSoft piano plays a gentle beat\nSaxophone whispers through the air\nMelodies floating everywhere\n\n[chorus]\nLet the music take you there\nClose your eyes without a care",
-  "thinking": true,
-  "audio_duration": 90,
+  "prompt": "smooth jazz, mellow saxophone, soft piano, chill vibes",
+  "lyrics": "[verse]\nMoonlight falls...",
   "bpm": 85,
   "key_scale": "Bb Major",
-  "time_signature": "4",
+  "audio_duration": 60,
+  "vocal_language": "en",
+  "thinking": true,
   "batch_size": 1,
   "audio_format": "mp3",
   "inference_steps": 8,
@@ -309,980 +716,174 @@ Creates an async music generation job. Returns a `task_id` for polling.
 }
 ```
 
-**Key parameters:**
+Returns: `{ "data": { "task_id": "..." } }`
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `prompt` | string | `""` | Music description / style tags (alias: `caption`) |
-| `lyrics` | string | `""` | Song lyrics with structure tags `[verse]`, `[chorus]`, `[bridge]` |
-| `thinking` | bool | `false` | **Set to `true`** — uses 5Hz LM for enhanced quality (LM-DiT mode) |
-| `audio_duration` | float | null | Duration in seconds, range 10-600 |
-| `bpm` | int | null | Tempo, range 30-300 |
-| `key_scale` | string | `""` | e.g., "C Major", "Am", "Bb Major" |
-| `time_signature` | string | `""` | "2", "3", "4", or "6" (for 2/4, 3/4, 4/4, 6/8) |
-| `batch_size` | int | `2` | Number of variations to generate (use `1` for radio) |
-| `audio_format` | string | `"mp3"` | Output format: "mp3", "wav", "flac" |
-| `inference_steps` | int | `8` | Steps for turbo model (1-20, recommended 8) |
-| `use_random_seed` | bool | `true` | Randomize seed each generation |
-| `use_format` | bool | `false` | Let ACE-Step's LM enhance the prompt |
-| `use_cot_caption` | bool | `true` | Let LM rewrite/enhance caption via CoT |
-| `sample_query` | string | `""` | Natural language description (auto-generates everything) |
-| `model` | string | null | DiT model name (e.g., "acestep-v15-turbo") |
-
-**Response:**
+#### POST /query_result — Poll Status
 
 ```json
-{
-  "data": {
-    "task_id": "550e8400-e29b-41d4-a716-446655440000",
-    "status": "queued",
-    "queue_position": 1
-  },
-  "code": 200,
-  "error": null,
-  "timestamp": 1700000000000,
-  "extra": null
-}
+{ "task_id_list": ["..."] }
 ```
 
-#### POST /query_result — Poll Task Status
+Returns `status: 0` (running), `1` (succeeded), or `2` (failed).
 
-**Request:**
-
-```json
-{
-  "task_id_list": ["550e8400-e29b-41d4-a716-446655440000"]
-}
-```
-
-**Response (task in progress):**
-
-```json
-{
-  "data": [
-    {
-      "task_id": "550e8400-e29b-41d4-a716-446655440000",
-      "status": 0,
-      "result": null
-    }
-  ],
-  "code": 200,
-  "error": null
-}
-```
-
-**Response (task completed — status=1):**
-
-```json
-{
-  "data": [
-    {
-      "task_id": "550e8400-e29b-41d4-a716-446655440000",
-      "status": 1,
-      "result": "[{\"file\": \"/v1/audio?path=%2Ftmp%2Fapi_audio%2Fabc123.mp3\", \"status\": 1, \"prompt\": \"smooth jazz...\", \"lyrics\": \"...\", \"metas\": {\"bpm\": 85, \"duration\": 90, \"keyscale\": \"Bb Major\", \"timesignature\": \"4\"}, \"seed_value\": \"12345\"}]"
-    }
-  ],
-  "code": 200,
-  "error": null
-}
-```
-
-**IMPORTANT:** The `result` field is a **JSON string** that must be parsed again. After parsing, it's an array of result objects. Each has a `file` field with the audio download URL.
-
-**Status codes:** `0` = queued/running, `1` = succeeded, `2` = failed.
+**Critical:** The `result` field is a **JSON string** — must be parsed with `json.loads()` to get the result array.
 
 #### GET /v1/audio?path=... — Download Audio
 
-Download the generated audio file. The `path` parameter is URL-encoded.
-
-```
-GET http://localhost:8001/v1/audio?path=%2Ftmp%2Fapi_audio%2Fabc123.mp3
-```
-
-Returns the audio file with appropriate Content-Type.
+Returns raw audio bytes with appropriate Content-Type.
 
 #### GET /health — Health Check
 
-```json
-{"data": {"status": "ok", "service": "ACE-Step API", "version": "1.0"}, "code": 200}
-```
-
-#### GET /v1/models — List Available Models
-
-```json
-{
-  "data": {
-    "models": [
-      {"name": "acestep-v15-turbo", "is_default": true}
-    ],
-    "default_model": "acestep-v15-turbo"
-  },
-  "code": 200
-}
-```
-
-#### GET /v1/stats — Server Statistics
-
-```json
-{
-  "data": {
-    "jobs": {"total": 10, "queued": 0, "running": 1, "succeeded": 9, "failed": 0},
-    "avg_job_seconds": 15.2
-  },
-  "code": 200
-}
-```
-
-### ACE-Step Performance on Apple Silicon
-
-From official benchmarks (MacBook M2 Max):
-
-| Steps | Time to render 1 min audio | Real-Time Factor |
-|---|---|---|
-| 27 steps | 26.4s | 2.27x |
-| 60 steps | 58.3s | 1.03x |
-| 8 steps (turbo) | ~8-12s (estimated) | ~5-7x (estimated) |
-
-With 64GB Mac mini, expect similar or better. A 90-second song at turbo (8 steps) should take roughly **12-20 seconds** to generate.
+Returns 200 with `{"data": {"status": "ok"}}`.
 
 ---
 
-## 7. Ollama LLM Integration Reference
+## 14. Ollama LLM Integration
 
-### Ollama Server
+### Model
 
-Ollama runs as a background service on port 11434. Start it with:
+Always `qwen3:8b` (5.2 GB, ~35 tok/s on Apple Silicon). Overridable via `OLLAMA_MODEL` env var.
 
-```bash
-ollama serve
-# Or it auto-starts when you run ollama commands
+### Structured Output
+
+Uses the `ollama` Python SDK with `format=SongPrompt.model_json_schema()` to constrain output to valid JSON matching the Pydantic schema.
+
+### Thinking Mode
+
+`think=False` — Qwen3's chain-of-thought mode is disabled. It adds latency without improving structured JSON output quality.
+
+### System Prompt Structure
+
 ```
+You are a creative AI radio DJ...
 
-### Model Selection Strategy
+SELECTED GENRES: {genres}
+SELECTED MOODS / KEYWORDS: {keywords}
 
-Two Qwen3 models are used, selected automatically at runtime based on the machine's unified memory:
-
-| Model | Ollama Size | Context | Quality | Auto-selected when |
-|---|---|---|---|---|
-| `qwen3:8b` | ~5.2 GB | 40K tokens | ≈ Qwen2.5-14B | Unified memory **< 32 GB** (e.g. 24GB dev machine) |
-| `qwen3:14b` | ~9.3 GB | 40K tokens | Rich & creative | Unified memory **≥ 32 GB** (e.g. 64GB Mac Mini) |
-
-Qwen3 is a generational improvement over Qwen2.5: `qwen3:8b` matches the quality of the old `qwen2.5:14b`. Both models support structured JSON output via the Ollama SDK.
-
-**Thinking mode is disabled** (`think=False`). Qwen3's chain-of-thought reasoning mode adds latency without improving the structured JSON output quality needed for song prompt generation.
-
-### Apple Silicon Memory Detection (`config.py`)
-
-The model is selected once at process startup using macOS's `sysctl` interface:
-
-```python
-import subprocess
-
-# Memory thresholds for model selection (unified memory in GB)
-MODEL_SMALL = "qwen3:8b"   # < 32 GB unified memory
-MODEL_LARGE = "qwen3:14b"  # ≥ 32 GB unified memory
-MEMORY_THRESHOLD_GB = 32
-
-def get_unified_memory_gb() -> int:
-    """Read total unified memory via sysctl (Apple Silicon / macOS only)."""
-    result = subprocess.run(
-        ["sysctl", "-n", "hw.memsize"],
-        capture_output=True, text=True, check=True,
-    )
-    return int(result.stdout.strip()) // (1024 ** 3)
-
-def select_ollama_model() -> str:
-    """Return the appropriate Qwen3 model tag for this machine."""
-    memory_gb = get_unified_memory_gb()
-    model = MODEL_LARGE if memory_gb >= MEMORY_THRESHOLD_GB else MODEL_SMALL
-    print(f"[config] Detected {memory_gb}GB unified memory → using {model}")
-    return model
-
-# Module-level singleton — resolved once at import time
-OLLAMA_MODEL: str = select_ollama_model()
-```
-
-`OLLAMA_MODEL` is imported by `llm.py` and used as the default. It can also be overridden via the `OLLAMA_MODEL` environment variable for manual control during development:
-
-```bash
-OLLAMA_MODEL=qwen3:14b uvicorn main:app ...
-```
-
-### Python SDK — Structured Output with Pydantic
-
-The `ollama` Python package supports structured output by passing a Pydantic model's JSON schema as the `format` parameter. This constrains the LLM to output valid JSON matching the schema.
-
-**Installation:**
-
-```bash
-pip install ollama
-```
-
-**Usage pattern for our project:**
-
-```python
-import os
-from ollama import chat
-from pydantic import BaseModel, Field
-from config import OLLAMA_MODEL
-
-class SongPrompt(BaseModel):
-    """Structured output from the LLM DJ brain."""
-    song_title: str = Field(description="Creative title for the song")
-    tags: str = Field(description="Comma-separated music style tags for ACE-Step")
-    lyrics: str = Field(description="Song lyrics with [verse], [chorus], [bridge] markers")
-    bpm: int = Field(description="Tempo in BPM", ge=60, le=200)
-    key_scale: str = Field(description="Musical key, e.g. 'C Major', 'Am', 'F# Minor'")
-    duration: int = Field(description="Song duration in seconds", ge=30, le=180)
-
-def generate_song_prompt(
-    genres: list[str],
-    keywords: list[str],
-    history: list[str],  # list of previous song_titles to avoid repetition
-    model: str | None = None,
-) -> SongPrompt:
-    # Allow env override; fall back to auto-detected model
-    model = model or os.environ.get("OLLAMA_MODEL", OLLAMA_MODEL)
-
-    history_text = ""
-    if history:
-        history_text = (
-            "\n\nSongs already played this session (do NOT repeat similar themes/styles):\n"
-            + "\n".join(f"- {h}" for h in history[-10:])
-        )
-
-    system_prompt = f"""You are a creative AI radio DJ. Your job is to generate unique, 
-original song prompts for an AI music generator.
-
-SELECTED GENRES: {', '.join(genres)}
-SELECTED MOODS/KEYWORDS: {', '.join(keywords) if keywords else 'None specified'}
-{history_text}
+Songs already played this session — avoid repeating similar themes or styles:
+  - {title_1}
+  - {title_2}
+  ...
 
 RULES:
-- Write original lyrics (2-4 sections using [verse], [chorus], [bridge] markers)
-- The "tags" field should be a comma-separated list of musical style descriptors 
-  that ACE-Step understands: genre, instruments, mood, tempo feel, vocal style, etc.
-- Vary the sub-genre, tempo, key, mood, and lyric themes between songs
-- Lyrics should be creative and evocative, not generic
-- Keep lyrics concise (4-8 lines per section)
-- BPM should match the genre and mood naturally
-- Duration should be between 60-120 seconds"""
-
-    response = chat(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Generate the next song for the radio station."},
-        ],
-        format=SongPrompt.model_json_schema(),
-        think=False,  # Disable Qwen3 chain-of-thought; not needed for structured JSON output
-    )
-
-    return SongPrompt.model_validate_json(response.message.content)
+- {language-specific lyrics instruction}
+- Write 2–4 lyric sections using [verse], [chorus], [bridge] markers
+- Tags must be comma-separated musical style descriptors
+- Vary sub-genre, tempo, key, mood between songs
+- Duration must be exactly {target_duration} seconds
 ```
 
-**Important Ollama notes:**
+### Thread Safety
 
-- The `format` parameter accepts a JSON Schema dict (from Pydantic's `model_json_schema()`)
-- The response `message.content` is a JSON string — parse with `model_validate_json()`
-- `think=False` requires `ollama>=0.5.1` — this is specified in `requirements.txt`
-- Ollama automatically uses Metal/GPU on Apple Silicon
-- Response time: typically 2–4 seconds on 24GB Apple Silicon (8b), 3–6 seconds on 64GB (14b)
+`ollama.chat()` is synchronous and blocks. It's wrapped in `asyncio.to_thread()` to avoid blocking the FastAPI event loop.
 
 ---
 
-## 8. Backend Implementation Spec
+## 15. Launch Scripts
 
-### models.py — Pydantic Models
+### `scripts/start.sh`
 
-```python
-from pydantic import BaseModel, Field
-from enum import Enum
+Launches 5 services in order:
 
-# --- Radio State ---
-class RadioState(str, Enum):
-    IDLE = "idle"           # No session active
-    GENERATING = "generating"  # Generating a song (no song playing yet)
-    PLAYING = "playing"     # Song is playing, may be pre-generating next
-    BUFFERING = "buffering" # Current song done, next still generating
-    STOPPED = "stopped"     # User stopped the radio
+1. **Ollama** — `ollama serve` (skipped if already running)
+2. **ACE-Step API** — `uv run acestep-api` with MLX backend (waits up to 60 min for first-run model download; skipped if port 8001 already responding)
+3. **FastAPI backend** — `uvicorn main:app` on port 5555 with `--reload` (clears stale port first)
+4. **Frontend** — `npm run dev` on port 5173 (clears stale port first)
+5. **Cloudflare tunnel** — `cloudflared tunnel --url http://localhost:5173` (skipped if cloudflared not installed)
 
-# --- LLM Output ---
-class SongPrompt(BaseModel):
-    song_title: str = Field(description="Creative title for the song")
-    tags: str = Field(description="Comma-separated music style tags")
-    lyrics: str = Field(description="Lyrics with [verse], [chorus], [bridge] markers")
-    bpm: int = Field(ge=60, le=200)
-    key_scale: str
-    duration: int = Field(ge=30, le=180)
+Shutdown (`Ctrl+C`): kills backend, frontend, tunnel, and Ollama (if started by the script). **ACE-Step is intentionally left running** to avoid its multi-minute warm-up penalty.
 
-# --- Track Info (sent to frontend) ---
-class TrackInfo(BaseModel):
-    id: str                  # Unique track ID (uuid)
-    song_title: str
-    tags: str
-    lyrics: str
-    bpm: int
-    key_scale: str
-    duration: int
-    audio_url: str           # Proxied URL: /api/audio/{track_id}
+### `scripts/setup.sh`
 
-# --- API Requests ---
-class RadioStartRequest(BaseModel):
-    genres: list[str]
-    keywords: list[str] = []
-
-# --- WebSocket Messages (server → client) ---
-class WSMessage(BaseModel):
-    event: str               # "track_ready", "status", "error"
-    data: dict
-```
-
-### genres.py — Genre and Keyword Definitions
-
-```python
-GENRES = [
-    {"id": "rock", "label": "Rock", "icon": "🎸", "subgenres": ["indie rock", "alternative rock", "classic rock", "punk rock", "post-rock"]},
-    {"id": "pop", "label": "Pop", "icon": "🎤", "subgenres": ["synth pop", "indie pop", "electropop", "dream pop", "art pop"]},
-    {"id": "jazz", "label": "Jazz", "icon": "🎷", "subgenres": ["smooth jazz", "bebop", "cool jazz", "jazz fusion", "bossa nova"]},
-    {"id": "electronic", "label": "Electronic", "icon": "🎹", "subgenres": ["ambient electronic", "house", "techno", "drum and bass", "synthwave"]},
-    {"id": "hiphop", "label": "Hip-Hop", "icon": "🎙️", "subgenres": ["boom bap", "trap", "lo-fi hip hop", "conscious hip hop", "jazz rap"]},
-    {"id": "classical", "label": "Classical", "icon": "🎻", "subgenres": ["orchestral", "chamber music", "piano solo", "romantic era", "minimalist"]},
-    {"id": "lofi", "label": "Lo-Fi", "icon": "📻", "subgenres": ["lo-fi hip hop", "lo-fi chill", "lo-fi jazz", "lo-fi ambient", "chillhop"]},
-    {"id": "ambient", "label": "Ambient", "icon": "🌊", "subgenres": ["dark ambient", "space ambient", "nature ambient", "drone", "new age"]},
-    {"id": "rnb", "label": "R&B", "icon": "💜", "subgenres": ["neo soul", "contemporary R&B", "funk", "quiet storm", "alternative R&B"]},
-    {"id": "folk", "label": "Folk", "icon": "🪕", "subgenres": ["indie folk", "acoustic folk", "folk rock", "Americana", "chamber folk"]},
-    {"id": "metal", "label": "Metal", "icon": "🤘", "subgenres": ["progressive metal", "doom metal", "symphonic metal", "post-metal", "melodic death metal"]},
-    {"id": "country", "label": "Country", "icon": "🤠", "subgenres": ["alt-country", "country pop", "bluegrass", "outlaw country", "country rock"]},
-]
-
-KEYWORDS = [
-    {"id": "energetic", "label": "Energetic"},
-    {"id": "melancholic", "label": "Melancholic"},
-    {"id": "dreamy", "label": "Dreamy"},
-    {"id": "aggressive", "label": "Aggressive"},
-    {"id": "chill", "label": "Chill"},
-    {"id": "upbeat", "label": "Upbeat"},
-    {"id": "dark", "label": "Dark"},
-    {"id": "romantic", "label": "Romantic"},
-    {"id": "ethereal", "label": "Ethereal"},
-    {"id": "groovy", "label": "Groovy"},
-    {"id": "epic", "label": "Epic"},
-    {"id": "nostalgic", "label": "Nostalgic"},
-    {"id": "minimal", "label": "Minimal"},
-    {"id": "psychedelic", "label": "Psychedelic"},
-    {"id": "cinematic", "label": "Cinematic"},
-]
-```
-
-### config.py — Runtime Configuration & Model Auto-Selection
-
-Runs once at import time. Reads unified memory via `sysctl hw.memsize` (macOS/Apple Silicon only) and selects the appropriate Qwen3 model. Exposes a single constant:
-
-```python
-OLLAMA_MODEL: str  # "qwen3:8b" or "qwen3:14b", overridable via OLLAMA_MODEL env var
-```
-
-Selection logic:
-- Unified memory **< 32 GB** → `qwen3:8b` (5.2 GB, ~35 tok/s — for dev machines)
-- Unified memory **≥ 32 GB** → `qwen3:14b` (9.3 GB, ~25 tok/s — for Mac Mini production)
-
-Environment variable override (useful during development):
-```bash
-OLLAMA_MODEL=qwen3:14b uvicorn main:app --port 5555
-```
-
-### llm.py — Ollama LLM Client
-
-Wraps Ollama SDK. Uses structured output to generate `SongPrompt` objects. Imports `OLLAMA_MODEL` from `config.py` as the default model. Includes a system prompt that instructs the LLM to act as a creative DJ. Accepts genre, keywords, and session history (last 10 song titles) to ensure variety.
-
-Key method: `async def generate_prompt(genres, keywords, history) -> SongPrompt`
-
-Use `ollama.chat()` (synchronous) wrapped in `asyncio.to_thread()` to avoid blocking the event loop.
-
-Always pass `think=False` to the `chat()` call — Qwen3's thinking mode is not needed for structured JSON prompt generation and adds unnecessary latency.
-
-### acestep_client.py — ACE-Step REST API Client
-
-Uses `httpx.AsyncClient` to communicate with ACE-Step API at `http://localhost:8001`.
-
-Key methods:
-
-```python
-class ACEStepClient:
-    def __init__(self, base_url: str = "http://localhost:8001"):
-        self.base_url = base_url
-        self.client = httpx.AsyncClient(base_url=base_url, timeout=300.0)
-
-    async def health_check(self) -> bool:
-        """GET /health — check if ACE-Step is running."""
-
-    async def submit_task(self, prompt: SongPrompt) -> str:
-        """POST /release_task — submit generation task, return task_id.
-        
-        Maps SongPrompt fields to ACE-Step API params:
-          prompt.tags     → "prompt" field
-          prompt.lyrics   → "lyrics" field
-          prompt.bpm      → "bpm" field
-          prompt.key_scale → "key_scale" field
-          prompt.duration → "audio_duration" field
-        
-        Always set: thinking=true, batch_size=1, audio_format="mp3", inference_steps=8
-        """
-
-    async def poll_task(self, task_id: str, interval: float = 2.0) -> dict:
-        """POST /query_result — poll until status=1 or status=2.
-        
-        Returns parsed result dict with 'file' key containing audio path.
-        IMPORTANT: The 'result' field in the response is a JSON STRING that must
-        be parsed again with json.loads(). After parsing, it's a list of dicts.
-        """
-
-    async def get_audio_bytes(self, audio_path: str) -> bytes:
-        """GET /v1/audio?path=... — download the generated audio file as bytes."""
-
-    async def generate_song(self, prompt: SongPrompt) -> tuple[bytes, dict]:
-        """Full pipeline: submit → poll → download. Returns (audio_bytes, metadata)."""
-```
-
-### radio.py — Radio Orchestrator
-
-The core state machine that manages the radio session.
-
-```python
-class RadioOrchestrator:
-    def __init__(self, llm: OllamaClient, acestep: ACEStepClient):
-        self.llm = llm
-        self.acestep = acestep
-        self.state: RadioState = RadioState.IDLE
-        self.genres: list[str] = []
-        self.keywords: list[str] = []
-        self.history: list[str] = []         # Song titles for variety
-        self.current_track: TrackInfo | None = None
-        self.next_track: TrackInfo | None = None  # Pre-buffered
-        self.audio_cache: dict[str, bytes] = {}   # track_id → audio bytes
-        self._task: asyncio.Task | None = None
-        self._stop_event = asyncio.Event()
-        self._track_ended_event = asyncio.Event()
-        self._ws_connections: list[WebSocket] = []
-
-    async def start(self, genres: list[str], keywords: list[str]):
-        """Start the radio loop as a background task."""
-
-    async def stop(self):
-        """Stop the radio loop, cancel background generation."""
-
-    async def skip(self):
-        """Skip current track — signal track_ended immediately."""
-
-    async def on_track_ended(self):
-        """Called when frontend reports track finished playing."""
-
-    async def _radio_loop(self):
-        """Main loop:
-        1. Generate first track (LLM → ACE-Step)
-        2. Broadcast track_ready to all WebSocket clients
-        3. Start pre-generating next track
-        4. Wait for track_ended signal
-        5. Swap next_track → current_track
-        6. Broadcast new track_ready
-        7. Start pre-generating another next track
-        8. Repeat until stopped
-        """
-
-    async def _generate_track(self) -> TrackInfo:
-        """Generate a single track:
-        1. Call LLM to get SongPrompt
-        2. Call ACE-Step to generate audio
-        3. Cache audio bytes in self.audio_cache
-        4. Return TrackInfo with proxied audio URL
-        """
-
-    async def broadcast(self, message: WSMessage):
-        """Send message to all connected WebSocket clients."""
-```
-
-### main.py — FastAPI Application
-
-```python
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
-
-app = FastAPI(title="Generative Radio")
-
-# CORS for frontend dev server (Vite on port 5173)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-# Endpoints:
-
-# GET  /api/genres          → Return GENRES and KEYWORDS lists
-# POST /api/radio/start     → Start radio with {genres, keywords}
-# POST /api/radio/stop      → Stop the radio
-# POST /api/radio/skip      → Skip to next track
-# GET  /api/radio/status    → Current state, current_track info
-# GET  /api/audio/{track_id} → Serve cached audio bytes (proxied from ACE-Step)
-# WS   /ws                  → WebSocket for real-time events
-```
-
-**WebSocket handler:**
-
-```python
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    radio.add_ws(websocket)
-    try:
-        while True:
-            data = await websocket.receive_json()
-            if data.get("event") == "track_ended":
-                await radio.on_track_ended()
-    except WebSocketDisconnect:
-        radio.remove_ws(websocket)
-```
-
-**Audio proxy endpoint:**
-
-```python
-@app.get("/api/audio/{track_id}")
-async def get_audio(track_id: str):
-    audio_bytes = radio.audio_cache.get(track_id)
-    if not audio_bytes:
-        raise HTTPException(404, "Track not found")
-    return Response(content=audio_bytes, media_type="audio/mpeg")
-```
+One-time setup (7 steps) — see §5 for details.
 
 ---
 
-## 9. Frontend Implementation Spec
+## 16. Memory, Duration & Performance
 
-### Design & Aesthetics
+### Memory vs. Duration (Apple Silicon)
 
-- **Theme:** Dark background (#0a0a0f or similar deep navy/black), with accent colors (warm amber/orange for active states, cool blue/purple for secondary)
-- **Aesthetic:** Minimal, modern radio interface. Think: a premium internet radio player
-- **Typography:** Clean sans-serif (system fonts or Inter)
-- **Layout:** Centered single-column, mobile-friendly, max-width ~600px
+ACE-Step's MLX VAE requires a single contiguous Metal buffer. Approximate requirements:
 
-### App.tsx — Main Layout
+| Duration | Est. Metal Buffer | Safe on |
+|---|---|---|
+| 30 s | ~3.8 GB | 16 GB+ machines |
+| 60 s | ~9.7 GB | 24 GB+ machines |
+| 120 s | ~21.5 GB | 48 GB+ machines |
+| 180 s | ~33.3 GB | 48 GB+ machines (with margin) |
 
-Three states:
-1. **Selection mode** (IDLE): Show GenreSelector, "Start Radio" button
-2. **Playing mode** (GENERATING/PLAYING/BUFFERING): Show RadioPlayer + StatusBar, "Back" to change genres
-3. Smooth transition between modes
+Formula: `memory_GB(t) = 9.7 + (t − 60) × 0.197`
 
-### GenreSelector.tsx
+See `docs/acestep-memory-vs-duration.md` for the full analysis, including the distinction between contiguous Metal buffers and total RAM.
 
-- Grid of genre cards (3 columns on desktop, 2 on mobile)
-- Each card shows icon + label, toggleable (highlighted when selected)
-- Below genres: horizontal scrollable row of keyword chips, also toggleable
-- "Start Radio" button at bottom (enabled when 1+ genre selected)
-- Visually clear which genres/keywords are selected (border glow, color change)
+### Duration Tiers (Implemented in `config.py`)
 
-### RadioPlayer.tsx
+| Unified Memory | Strategy |
+|---|---|
+| ≤ 32 GB | 30 s fixed |
+| 33–47 GB | 60 s fixed |
+| ≥ 48 GB | Progressive: 60 → 120 → 180 s |
 
-- **Now Playing section:**
-  - Song title (large text)
-  - Tags/genre (smaller, muted text)
-  - Animated equalizer bars (CSS-only, 4-5 bars with varying animation speeds)
-- **Controls:**
-  - Large circular Play/Stop toggle button (center)
-  - Skip button (to the right)
-- **Progress:** Simple thin progress bar showing playback position
-- **Audio element:** Hidden `<audio>` element controlled by the `useRadio` hook
+### Memory Snapshot Logging
 
-### StatusBar.tsx
-
-- Shows real-time generation status:
-  - "Generating your first track..." (with spinner)
-  - "Playing — next track ready" (green dot)
-  - "Playing — generating next track..." (amber dot + spinner)
-  - "Buffering next track..." (when current ended but next isn't ready)
-
-### useRadio.ts — WebSocket Hook
-
-```typescript
-type RadioStatus = "idle" | "connecting" | "generating" | "playing" | "buffering" | "stopped";
-
-interface Track {
-  id: string;
-  songTitle: string;
-  tags: string;
-  lyrics: string;
-  bpm: number;
-  keyScale: string;
-  duration: number;
-  audioUrl: string;
-}
-
-interface UseRadioReturn {
-  status: RadioStatus;
-  currentTrack: Track | null;
-  nextReady: boolean;
-  start: (genres: string[], keywords: string[]) => Promise<void>;
-  stop: () => Promise<void>;
-  skip: () => void;
-  audioRef: React.RefObject<HTMLAudioElement>;
-}
-```
-
-**WebSocket message handling:**
-
-```typescript
-// Server → Client messages:
-// { event: "track_ready", data: { track: Track, isNext: boolean } }
-//   - If isNext=false: this is the current track, start playing immediately
-//   - If isNext=true: this is pre-buffered, store for when current ends
-//
-// { event: "status", data: { state: RadioState, message: string } }
-//   - UI status updates
-//
-// { event: "error", data: { message: string } }
-//   - Error display
-
-// Client → Server messages:
-// { event: "track_ended" }
-//   - Sent when <audio> element fires "ended" event
-```
-
-**Audio playback logic:**
-
-```typescript
-// When track_ready (isNext=false) received:
-//   1. Set audioRef.src = track.audioUrl
-//   2. audioRef.play()
-//   3. Update currentTrack state
-//
-// When <audio> "ended" event fires:
-//   1. Send { event: "track_ended" } via WebSocket
-//   2. If nextTrack is available, immediately play it
-//   3. Set status to "buffering" if next not ready
-//
-// When track_ready (isNext=true) received:
-//   1. Store as nextTrack
-//   2. Update nextReady = true
-```
-
-### vite.config.ts
-
-```typescript
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    port: 5173,
-    proxy: {
-      '/api': 'http://localhost:5555',
-      '/ws': {
-        target: 'ws://localhost:5555',
-        ws: true,
-      },
-    },
-  },
-})
-```
-
----
-
-## 10. WebSocket Protocol
-
-### Connection
+`psutil`-based RAM and swap monitoring is logged before and after each LLM and ACE-Step call:
 
 ```
-ws://localhost:5555/ws
+[radio] [a1b2c3d4] Before LLM     — RAM 18.2/24GB (76% used, 5.8GB free)
+[radio] [a1b2c3d4] Before ACE-Step — RAM 19.1/24GB (80% used, 4.9GB free)
+[radio] [a1b2c3d4] After ACE-Step  — RAM 22.3/24GB (93% used, 1.7GB free)
 ```
-
-Frontend connects on mount, reconnects on disconnect (with exponential backoff).
-
-### Server → Client Messages
-
-#### track_ready
-
-Sent when a song has been generated and is ready to play.
-
-```json
-{
-  "event": "track_ready",
-  "data": {
-    "track": {
-      "id": "a1b2c3d4",
-      "songTitle": "Midnight Boulevard",
-      "tags": "smooth jazz, mellow saxophone, soft piano",
-      "lyrics": "[verse]\nMoonlight falls on city streets...",
-      "bpm": 85,
-      "keyScale": "Bb Major",
-      "duration": 90,
-      "audioUrl": "/api/audio/a1b2c3d4"
-    },
-    "isNext": false
-  }
-}
-```
-
-- `isNext: false` → Play this track immediately (it's the current track)
-- `isNext: true` → Buffer this track (it's pre-generated for seamless transition)
-
-#### status
-
-Sent to update the UI status bar.
-
-```json
-{
-  "event": "status",
-  "data": {
-    "state": "playing",
-    "message": "Generating next track...",
-    "nextReady": false
-  }
-}
-```
-
-#### error
-
-```json
-{
-  "event": "error",
-  "data": {
-    "message": "ACE-Step server is not responding. Please check if it's running."
-  }
-}
-```
-
-### Client → Server Messages
-
-#### track_ended
-
-Sent when the `<audio>` element fires its `ended` event.
-
-```json
-{
-  "event": "track_ended"
-}
-```
-
----
-
-## 11. Launch Scripts
-
-### scripts/setup.sh
-
-One-time setup script. Checks and installs prerequisites.
-
-```bash
-#!/bin/bash
-set -e
-
-echo "=== Generative Radio Setup ==="
-
-# Check Homebrew
-if ! command -v brew &>/dev/null; then
-  echo "Installing Homebrew..."
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-fi
-
-# Install system deps
-brew install python@3.11 node ffmpeg git-lfs || true
-
-# Install uv
-if ! command -v uv &>/dev/null; then
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="$HOME/.local/bin:$PATH"
-fi
-
-# Install Ollama
-if ! command -v ollama &>/dev/null; then
-  brew install ollama
-fi
-
-# Pull LLM models (both are pulled so the correct one is available on any machine)
-# config.py selects automatically at runtime based on unified memory:
-#   qwen3:8b  — used on machines with <32GB unified memory (e.g. 24GB dev machine)
-#   qwen3:14b — used on machines with 32GB+ unified memory (e.g. 64GB Mac Mini)
-echo "Pulling qwen3:8b (~5.2GB)..."
-ollama pull qwen3:8b
-echo "Pulling qwen3:14b (~9.3GB)..."
-ollama pull qwen3:14b
-
-# Clone ACE-Step 1.5 if not present
-ACESTEP_DIR="${ACESTEP_PATH:-../ACE-Step-1.5}"
-if [ ! -d "$ACESTEP_DIR" ]; then
-  echo "Cloning ACE-Step 1.5..."
-  git clone https://github.com/ACE-Step/ACE-Step-1.5.git "$ACESTEP_DIR"
-  cd "$ACESTEP_DIR" && uv sync && cd -
-else
-  echo "ACE-Step 1.5 found at $ACESTEP_DIR"
-fi
-
-# Install backend deps
-echo "Installing backend Python dependencies..."
-cd backend && pip install -r requirements.txt && cd ..
-
-# Install frontend deps
-echo "Installing frontend Node dependencies..."
-cd frontend && npm install && cd ..
-
-echo ""
-echo "=== Setup complete! ==="
-echo "Run ./scripts/start.sh to launch the radio."
-```
-
-### scripts/start.sh
-
-Launches all three services and the frontend dev server.
-
-```bash
-#!/bin/bash
-set -e
-
-ACESTEP_DIR="${ACESTEP_PATH:-../ACE-Step-1.5}"
-
-echo "=== Starting Generative Radio ==="
-
-# Set macOS env vars
-export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
-export PYTORCH_ENABLE_MPS_FALLBACK=1
-
-# 1. Start Ollama (if not already running)
-if ! pgrep -x "ollama" > /dev/null; then
-  echo "[1/4] Starting Ollama..."
-  ollama serve &
-  sleep 2
-else
-  echo "[1/4] Ollama already running."
-fi
-
-# 2. Start ACE-Step API server
-echo "[2/4] Starting ACE-Step 1.5 API server..."
-cd "$ACESTEP_DIR"
-ACESTEP_LM_BACKEND=mlx TOKENIZERS_PARALLELISM=false \
-  uv run acestep-api --host 127.0.0.1 --port 8001 &
-ACESTEP_PID=$!
-cd - > /dev/null
-
-# Wait for ACE-Step to be ready
-echo "  Waiting for ACE-Step API to be ready..."
-for i in {1..120}; do
-  if curl -s http://localhost:8001/health > /dev/null 2>&1; then
-    echo "  ACE-Step API ready!"
-    break
-  fi
-  sleep 2
-done
-
-# 3. Start FastAPI backend
-echo "[3/4] Starting backend server..."
-cd backend
-uvicorn main:app --host 127.0.0.1 --port 5555 --reload &
-BACKEND_PID=$!
-cd ..
-
-# 4. Start frontend dev server
-echo "[4/4] Starting frontend dev server..."
-cd frontend
-npm run dev &
-FRONTEND_PID=$!
-cd ..
-
-echo ""
-echo "=== Generative Radio is live! ==="
-echo "  Frontend:   http://localhost:5173"
-echo "  Backend:    http://localhost:5555"
-echo "  ACE-Step:   http://localhost:8001"
-echo "  Ollama:     http://localhost:11434"
-echo ""
-echo "Press Ctrl+C to stop all services."
-
-# Trap Ctrl+C to clean up
-trap "echo 'Shutting down...'; kill $ACESTEP_PID $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit" INT TERM
-
-# Wait for all background processes
-wait
-```
-
----
-
-## 12. macOS-Specific Configuration
-
-### Environment Variables
-
-```bash
-# ~/.zshrc additions
-export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0   # Allow full memory usage for MPS
-export PYTORCH_ENABLE_MPS_FALLBACK=1           # CPU fallback for unsupported ops
-```
-
-### ACE-Step macOS Settings
-
-- Use `ACESTEP_LM_BACKEND=mlx` for Apple Silicon native LM inference
-- The macOS launch script (`start_api_server_macos.sh`) handles this automatically
-- `--bf16 false` flag may be needed on some macOS versions (the macOS script handles this)
-- Turbo model (`acestep-v15-turbo`) with 8 inference steps is the recommended config
-
-### Memory Considerations
-
-Both target machines run all services comfortably. The correct Qwen3 model is selected automatically at runtime by `config.py`:
-
-| Service | Dev Machine (24GB) | Mac Mini (64GB) | Notes |
-|---|---|---|---|
-| Ollama (`qwen3:8b`) | ~5.2 GB | — | Auto-selected when unified memory < 32 GB |
-| Ollama (`qwen3:14b`) | — | ~9.3 GB | Auto-selected when unified memory ≥ 32 GB |
-| ACE-Step 1.5 (turbo) | ~4–6 GB | ~4–6 GB | DiT model + VAE + LM; MLX backend |
-| FastAPI backend | ~100 MB | ~100 MB | Lightweight, plus in-memory audio cache |
-| Frontend (browser) | ~200 MB | ~200 MB | Standard React app |
-| **Total** | **~10–12 GB** | **~14–16 GB** | Dev: ~12 GB free; Mac Mini: ~48 GB free |
 
 ### Port Summary
 
-| Service | Port | Purpose |
+| Service | Port | Protocol |
 |---|---|---|
-| Frontend (Vite) | 5173 | Dev server with HMR |
-| Backend (FastAPI) | 5555 | REST API + WebSocket |
-| ACE-Step API | 8001 | Music generation |
-| Ollama | 11434 | LLM inference |
+| Frontend (Vite) | 5173 | HTTP (proxies /api, /ws) |
+| Backend (FastAPI) | 5555 | HTTP + WebSocket |
+| ACE-Step API | 8001 | HTTP |
+| Ollama | 11434 | HTTP |
 
 ---
 
-## 13. Build Order & Task Checklist
+## 17. Remote Access (Cloudflare Tunnel)
 
-Build in this order — each step builds on the previous:
+`start.sh` automatically starts a Cloudflare Quick Tunnel on port 5173. The URL appears in the startup banner:
 
-### Phase 1: Foundation
+```
+║  Remote:     https://xxxx-xxxx.trycloudflare.com
+```
 
-- [ ] **1.1** Create project directory structure (all folders, empty files)
-- [ ] **1.2** Write `backend/requirements.txt` with pinned deps
-- [ ] **1.3** Write `backend/models.py` — all Pydantic models
-- [ ] **1.4** Write `backend/genres.py` — genre/keyword static data
+The Vite dev server proxies all backend traffic (`/api/...`, `/ws`) internally, so a single tunnel on port 5173 exposes the full app including WebSockets.
 
-### Phase 2: Backend Services
+Quick Tunnels are ephemeral — the URL changes each restart. For a permanent URL, set up a named Cloudflare Tunnel.
 
-- [ ] **2.1** Write `backend/acestep_client.py` — ACE-Step REST API client (submit, poll, download)
-- [ ] **2.2** Write `backend/llm.py` — Ollama client with structured output
-- [ ] **2.3** Write `backend/radio.py` — RadioOrchestrator async state machine
-- [ ] **2.4** Write `backend/main.py` — FastAPI app with all endpoints + WebSocket
+---
 
-### Phase 3: Frontend
+## 18. Debugging & Logging
 
-- [ ] **3.1** Scaffold React + Vite + TypeScript project (`npm create vite@latest`)
-- [ ] **3.2** Configure `vite.config.ts` with backend proxy
-- [ ] **3.3** Write `src/types.ts` — shared TypeScript types
-- [ ] **3.4** Write `src/hooks/useRadio.ts` — WebSocket + radio state hook
-- [ ] **3.5** Write `src/components/GenreSelector.tsx`
-- [ ] **3.6** Write `src/components/RadioPlayer.tsx`
-- [ ] **3.7** Write `src/components/StatusBar.tsx`
-- [ ] **3.8** Write `src/App.tsx` + `src/App.css` — layout + dark theme styling
-- [ ] **3.9** Write `src/main.tsx` — React entry point
+### Log Files
 
-### Phase 4: Scripts & Docs
+```bash
+tail -f /tmp/generative-radio-backend.log     # FastAPI backend
+tail -f /tmp/generative-radio-acestep.log     # ACE-Step API
+tail -f /tmp/generative-radio-frontend.log    # Vite dev server
+tail -f /tmp/generative-radio-cloudflared.log # Cloudflare tunnel
+```
 
-- [ ] **4.1** Write `scripts/setup.sh`
-- [ ] **4.2** Write `scripts/start.sh`
-- [ ] **4.3** Write `README.md` — user-facing setup & usage
+### Backend Log Format
 
-### Phase 5: Integration Test
+```
+HH:MM:SS [LEVEL] module: [component] message
+```
 
-- [ ] **5.1** Start all services using `start.sh`
-- [ ] **5.2** Open browser, select a genre, click Play
-- [ ] **5.3** Verify: LLM generates prompt → ACE-Step generates song → audio plays
-- [ ] **5.4** Verify: next song pre-generates and plays seamlessly
-- [ ] **5.5** Verify: Stop/Skip controls work correctly
+Components: `[main]`, `[radio]`, `[llm]`, `[acestep]`, `[config]`
+
+Each track generation is tagged with a short ID (first 8 chars of a UUID) for log correlation.
+
+### Frontend Log Prefixes
+
+Browser DevTools console:
+- `[WS]` — WebSocket connection, send, receive
+- `[Radio]` — State transitions, role assignment
+- `[Audio]` — Playback, pre-fetch, blob URL lifecycle, iOS unlock
+- `[GenreSelector]` — Genre/keyword/language selection

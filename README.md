@@ -1,13 +1,13 @@
 # Generative Radio
 
-A fully local, offline AI radio web app. Pick genres and moods — the app generates and plays an endless stream of original AI-composed songs with no cloud APIs required.
+A fully local, offline AI radio web app. Pick a genre, mood, and vocal language — the app generates and plays an endless stream of original AI-composed songs with no cloud APIs required.
 
 ## Requirements
 
 - Mac with Apple Silicon (M1/M2/M3/M4)
 - macOS 14+
-- 16GB+ unified memory (24GB+ recommended for development, 64GB for production)
-- 50GB+ free SSD space
+- 16 GB+ unified memory (24 GB+ recommended for development, 64 GB for production)
+- 50 GB+ free SSD space
 
 ## Quick Start
 
@@ -39,12 +39,27 @@ When `cloudflared` is installed, a free public URL is printed in the startup ban
 
 ## How it works
 
-1. Select one or more genres and optional mood keywords
-2. Click **Start Radio**
-3. A local LLM (Ollama + Qwen3) generates a creative song prompt
-4. ACE-Step 1.5 generates a full MP3 with vocals
-5. The song plays in your browser with a live activity log showing generation progress
-6. The next song is pre-generated while the current one plays — seamless transitions
+1. Select a genre and optional mood keywords
+2. Choose a vocal language (11 languages) or instrumental mode
+3. Click **Start Radio**
+4. A local LLM (Ollama + Qwen3) generates a creative song prompt
+5. ACE-Step 1.5 generates a full MP3 with vocals (or instrumental)
+6. The song plays in your browser with a live activity log showing generation progress
+7. The next song is pre-generated while the current one plays — the frontend pre-fetches audio bytes into memory for seamless, zero-latency transitions
+
+## Multi-listener mode
+
+Multiple browsers can connect to the same session. The first connection becomes the **controller** — they pick genres, start/stop the radio, and see a list of connected listeners. Everyone else joins as a **viewer** with a read-only player that streams the same audio in real time.
+
+If the controller disconnects, the next viewer is automatically promoted.
+
+Share the URL (local or remote tunnel) with others and they'll join as listeners instantly.
+
+## Supported languages
+
+English, Español, Français, Deutsch, Italiano, 中文, Ελληνικά, Suomi, Svenska, 日本語, 한국語, and a **No Vocal** (instrumental) mode.
+
+The selected language affects both the LLM-generated lyrics and the ACE-Step vocal synthesis.
 
 ## Player controls
 
@@ -62,21 +77,23 @@ When `cloudflared` is installed, a free public URL is printed in the startup ban
 ║  Remote:     https://xxxx-xxxx.trycloudflare.com
 ```
 
-Share the remote URL with anyone — it works on any device without port forwarding or a static IP.
+Share the remote URL with anyone — it works on any device without port forwarding or a static IP. Viewers joining via the tunnel automatically get the read-only listener experience.
 
-**How it works:** The Vite dev server proxies all backend traffic (`/api/...`, `/ws`) internally on the Mac Mini, so a single tunnel on port 5173 exposes the full app including WebSockets. No tunnel-side configuration is needed.
+**How it works:** The Vite dev server proxies all backend traffic (`/api/...`, `/ws`) internally, so a single tunnel on port 5173 exposes the full app including WebSockets. No tunnel-side configuration is needed.
 
 **Note:** Cloudflare Quick Tunnels are ephemeral — the URL changes each time `start.sh` is run. For a stable permanent URL, set up a [named Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/) with your own domain.
 
 ## Architecture
 
-| Service           | Port  | Description                                   |
-|-------------------|-------|-----------------------------------------------|
-| Frontend          | 5173  | React + Vite (dev server, proxies /api and /ws) |
-| Backend           | 5555  | FastAPI (REST + WebSocket)                    |
-| ACE-Step API      | 8001  | Music generation (MLX / Apple Silicon)        |
-| Ollama            | 11434 | LLM inference                                 |
-| Cloudflare Tunnel | —     | Exposes port 5173 publicly (optional)         |
+| Service | Port | Description |
+|---|---|---|
+| Frontend | 5173 | React + Vite (dev server, proxies /api and /ws) |
+| Backend | 5555 | FastAPI (REST + WebSocket) |
+| ACE-Step API | 8001 | Music generation (MLX / Apple Silicon) |
+| Ollama | 11434 | LLM inference |
+| Cloudflare Tunnel | — | Exposes port 5173 publicly (optional) |
+
+See `BUILD_SPEC.md` for the full technical specification including WebSocket protocol, data models, and implementation details.
 
 ## LLM and audio duration
 
@@ -84,10 +101,11 @@ The app always uses **`qwen3:8b`** (5.2 GB) for song prompt generation. Using th
 
 Audio duration is selected automatically at startup based on unified memory:
 
-| Memory | Max duration | Rationale |
-|--------|-------------|-----------|
-| < 48 GB | 60 s | Safe within MLX VAE Metal buffer limits |
-| ≥ 48 GB | 180 s | Sufficient Metal headroom on 64 GB machines |
+| Memory | Duration | Rationale |
+|---|---|---|
+| ≤ 32 GB | 30 s | Fast iteration on dev machines |
+| 33–47 GB | 60 s | Safe within MLX VAE Metal buffer limits |
+| ≥ 48 GB | 60 s → 120 s → 180 s | Progressive ramp — first track starts quickly, subsequent tracks get longer |
 
 See `docs/acestep-memory-vs-duration.md` for the full memory vs. duration analysis.
 
