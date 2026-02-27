@@ -45,6 +45,7 @@ class TrackInfo(BaseModel):
     """Track metadata sent to the frontend."""
     id: str
     song_title: str
+    genre: str          # Human-readable genre label e.g. "Flamenco"
     tags: str
     lyrics: str
     bpm: int

@@ -151,6 +151,10 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   box-shadow: 0 0 0 1px var(--accent-glow), inset 0 0 0 1px var(--accent-glow);
 }
 
+.genre-pill--random {
+  border-style: dashed;
+}
+
 /* Keyword chips */
 .keyword-row {
   display: flex;
@@ -773,6 +777,15 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   opacity: 0.7;
 }
 
+/* Badges row (controller + genre) */
+.player__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
 /* Controller badge */
 .player__controller-badge {
   align-self: flex-start;
@@ -783,7 +796,19 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   border: 2px solid var(--accent);
   border-radius: var(--radius-sm);
   padding: 4px 10px;
-  margin-bottom: 16px;
+  text-transform: uppercase;
+}
+
+/* Genre badge — same visual as controller badge */
+.player__genre-badge {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
   text-transform: uppercase;
 }
 
