@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Genre, Keyword, Language, AdvancedOptions } from '../types';
+import { Genre, Keyword, Language, AdvancedOptions, Track } from '../types';
 
 const MOOD_CATEGORY_LABELS: Record<string, string> = {
   energy: 'Energy',
@@ -30,9 +30,10 @@ const DEFAULT_INFERENCE_STEPS = 8;
 
 interface GenreSelectorProps {
   onStart: (genres: string[], keywords: string[], language: string, feeling: string, djName: string, advancedOptions?: AdvancedOptions) => void;
+  currentTrack: Track | null;
 }
 
-export function GenreSelector({ onStart }: GenreSelectorProps) {
+export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
   const [genres, setGenres] = useState<Genre[]>([]);
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [languages, setLanguages] = useState<Language[]>([]);
@@ -116,6 +117,14 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
         <h1 className="selector__title">Generative Radio</h1>
         <p className="selector__subtitle">Local AI · Infinite Music</p>
       </header>
+
+      {currentTrack && (
+        <div className="now-playing-banner">
+          <span className="now-playing-banner__label">♪ Now Playing</span>
+          <span className="now-playing-banner__title">{currentTrack.songTitle}</span>
+          <span className="now-playing-banner__hint">Pick new settings — "Update Radio" applies them on the next track</span>
+        </div>
+      )}
 
       <section className="selector__section">
         <h2 className="selector__section-title">Choose your genre</h2>
@@ -327,7 +336,7 @@ export function GenreSelector({ onStart }: GenreSelectorProps) {
           onClick={handleStart}
           disabled={!selectedGenre}
         >
-          Start Radio
+          {currentTrack ? 'Update Radio' : 'Start Radio'}
         </button>
       </div>
     </div>

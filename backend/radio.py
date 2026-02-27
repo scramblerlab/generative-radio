@@ -248,6 +248,73 @@ class RadioOrchestrator:
             return
         await self.stop()
 
+    async def reschedule(
+        self,
+        genres: list[str],
+        keywords: list[str],
+        language: str = "en",
+        feeling: str = "",
+        advanced_options: dict | None = None,
+    ) -> None:
+        """Update settings mid-session: keep current track playing, restart pre-buffer with new settings.
+        Falls back to a full start() if not currently in a playing/buffering state."""
+        if self.state not in (RadioState.PLAYING, RadioState.BUFFERING):
+            logger.info("[radio] reschedule called but not playing — doing full start()")
+            await self.start(genres, keywords, language, feeling, advanced_options)
+            return
+
+        logger.info(
+            f"[radio] Rescheduling — new genres: {genres}, keywords: {keywords}, language: {language}"
+        )
+
+        # Update settings (take effect for the next generated track onwards)
+        self.genres = genres
+        self.keywords = keywords
+        self.language = language
+        self.feeling = feeling
+        self.advanced_options = advanced_options or {}
+        self.history = []        # Reset so new genre isn't biased by old session history
+        self._pinned_seed = None  # Seed pinning doesn't make sense across a genre change
+        self._last_seed = None
+
+        # Discard any pre-buffered next track — it was generated with old settings
+        self._cancel_prebuffer()
+        if self.next_track:
+            self.audio_cache.pop(self.next_track.id, None)
+            logger.info(
+                f"[radio] Discarded pre-buffered track '{self.next_track.song_title}' (old settings)"
+            )
+        self.next_track = None
+        self._next_track_ready_event.clear()
+
+        # Kick off a fresh pre-buffer with the new settings; current track keeps playing
+        self._start_prebuffer()
+
+        await self._broadcast_status("playing", "Settings updated — generating next track...")
+
+    async def reschedule_from_ws(
+        self,
+        ws: WebSocket,
+        genres: list[str],
+        keywords: list[str],
+        language: str = "en",
+        feeling: str = "",
+        advanced_options: dict | None = None,
+    ) -> None:
+        """reschedule() gated to the current controller."""
+        if ws != self._controller_ws:
+            logger.warning("[radio] reschedule_from_ws rejected — sender is not the controller")
+            await self._send_to(
+                ws, WSMessage(event="error", data={"message": "Only the host can change settings"})
+            )
+            return
+        if not genres:
+            await self._send_to(
+                ws, WSMessage(event="error", data={"message": "At least one genre is required"})
+            )
+            return
+        await self.reschedule(genres, keywords, language, feeling, advanced_options)
+
     async def skip_from_ws(self, ws: WebSocket) -> None:
         """Skip the current track — authorised only for the current controller."""
         if ws != self._controller_ws:

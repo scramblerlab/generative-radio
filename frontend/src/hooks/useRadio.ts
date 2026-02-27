@@ -32,6 +32,7 @@ export interface UseRadioReturn {
   setMoreLikeThis: (on: boolean) => void;
   start: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => Promise<void>;
   stop: () => Promise<void>;
+  updateSettings: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => void;
   rewind: () => void;
   unblockAudio: () => void;
   audioRef: RefObject<HTMLAudioElement | null>;
@@ -379,6 +380,20 @@ export function useRadio(): UseRadioReturn {
     sendWS({ event: 'start', data: { genres, keywords, language, feeling, advancedOptions } });
   }, [clearPreloadBlob, clearActiveBlob, sendWS]);
 
+  const updateSettings = useCallback((
+    genres: string[], keywords: string[], language: string = 'en',
+    feeling: string = '', advancedOptions?: AdvancedOptions
+  ) => {
+    console.log('[Radio] Updating settings mid-session — genres:', genres, 'language:', language);
+    // Do NOT touch audioRef or activeBlobUrl — current track keeps playing
+    setMoreLikeThisState(false);
+    setLastSeed(null);
+    setNextReady(false);
+    nextTrackRef.current = null;
+    clearPreloadBlob(); // Revoke pre-fetched blob for old next track (will be discarded)
+    sendWS({ event: 'reschedule', data: { genres, keywords, language, feeling, advancedOptions } });
+  }, [clearPreloadBlob, sendWS]);
+
   const stop = useCallback(async () => {
     console.log('[Radio] Stop requested');
     audioRef.current?.pause();
@@ -446,6 +461,7 @@ export function useRadio(): UseRadioReturn {
     setMoreLikeThis,
     start,
     stop,
+    updateSettings,
     rewind,
     unblockAudio,
     audioRef,
