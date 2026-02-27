@@ -447,6 +447,42 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   color: var(--text-muted);
 }
 
+/* Now-playing banner — shown in GenreSelector while audio is still playing */
+.now-playing-banner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 20px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-glow);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.now-playing-banner__label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.now-playing-banner__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.now-playing-banner__hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .start-button {
   padding: 14px 40px;
   background: var(--accent);

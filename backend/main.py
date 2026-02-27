@@ -162,6 +162,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
             elif event == "stop":
                 await radio.stop_from_ws(websocket)
+            elif event == "reschedule":
+                event_data = data.get("data", {})
+                await radio.reschedule_from_ws(
+                    websocket,
+                    genres=event_data.get("genres", []),
+                    keywords=event_data.get("keywords", []),
+                    language=event_data.get("language", "en"),
+                    feeling=event_data.get("feeling", ""),
+                    advanced_options=event_data.get("advancedOptions"),
+                )
             elif event == "skip":
                 await radio.skip_from_ws(websocket)
             elif event == "pin_seed":

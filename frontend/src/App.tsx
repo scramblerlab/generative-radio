@@ -20,7 +20,12 @@ export default function App() {
     setSessionInfo({ genre: genres[0] ?? '', keywords, language });
     setDjName(name);
     setView('player');
-    await radio.start(genres, keywords, language, feeling, advancedOptions);
+    if (radio.currentTrack !== null) {
+      // Mid-session: keep current track playing, reschedule next track with new settings
+      radio.updateSettings(genres, keywords, language, feeling, advancedOptions);
+    } else {
+      await radio.start(genres, keywords, language, feeling, advancedOptions);
+    }
   };
 
   const handleStop = async () => {
@@ -29,7 +34,7 @@ export default function App() {
   };
 
   const handleBack = () => {
-    radio.stop();
+    // Do NOT stop — audio keeps playing while controller browses genres
     setView('selector');
   };
 
@@ -77,7 +82,7 @@ export default function App() {
           />
         ) : (
           view === 'selector' ? (
-            <GenreSelector onStart={handleStart} />
+            <GenreSelector onStart={handleStart} currentTrack={radio.currentTrack} />
           ) : (
             <RadioPlayer
               readonly={false}
