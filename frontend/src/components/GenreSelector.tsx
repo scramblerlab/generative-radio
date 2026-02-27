@@ -6,9 +6,10 @@ const MOOD_CATEGORY_LABELS: Record<string, string> = {
   emotion: 'Emotion',
   atmosphere: 'Atmosphere',
   texture: 'Texture',
+  instrument: 'Instrument',
 };
 
-const MOOD_CATEGORY_ORDER = ['energy', 'emotion', 'atmosphere', 'texture'];
+const MOOD_CATEGORY_ORDER = ['energy', 'emotion', 'atmosphere', 'texture', 'instrument'];
 const FEELING_MAX_LENGTH = 200;
 
 const TIME_SIGNATURES = [
@@ -27,6 +28,8 @@ const DIT_MODELS = [
 ];
 
 const DEFAULT_INFERENCE_STEPS = 8;
+const INFERENCE_STEPS_MIN = 4;
+const INFERENCE_STEPS_MAX = 100;
 
 interface GenreSelectorProps {
   onStart: (genres: string[], keywords: string[], language: string, feeling: string, djName: string, advancedOptions?: AdvancedOptions) => void;
@@ -48,20 +51,37 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
   const [timeSignature, setTimeSignature] = useState('');
   const [inferenceSteps, setInferenceSteps] = useState(DEFAULT_INFERENCE_STEPS);
   const [ditModel, setDitModel] = useState('turbo');
+  const [thinking, setThinking] = useState(true);
+  const [useCotCaption, setUseCotCaption] = useState(false);
+  const [useCotMetas, setUseCotMetas] = useState(false);
+  const [useCotLanguage, setUseCotLanguage] = useState(false);
 
   useEffect(() => {
-    console.log('[GenreSelector] Fetching genres and keywords from /api/genres');
-    fetch('/api/genres')
-      .then((r) => r.json())
-      .then((data: { genres: Genre[]; keywords: Keyword[]; languages: Language[] }) => {
-        console.log('[GenreSelector] Loaded', data.genres.length, 'genres,', data.keywords.length, 'keywords,', data.languages.length, 'languages');
-        setGenres(data.genres);
-        setKeywords(data.keywords);
-        setLanguages(data.languages);
+    console.log('[GenreSelector] Fetching genres, keywords, and saved options');
+    Promise.all([
+      fetch('/api/genres').then((r) => r.json()),
+      fetch('/api/advanced-options').then((r) => r.json()),
+    ])
+      .then(([genreData, savedOpts]: [{ genres: Genre[]; keywords: Keyword[]; languages: Language[] }, Record<string, unknown>]) => {
+        console.log('[GenreSelector] Loaded', genreData.genres.length, 'genres,', genreData.keywords.length, 'keywords,', genreData.languages.length, 'languages');
+        setGenres(genreData.genres);
+        setKeywords(genreData.keywords);
+        setLanguages(genreData.languages);
+        // Restore saved advanced options if a previous session stored them
+        if (savedOpts && Object.keys(savedOpts).length > 0) {
+          if (savedOpts.timeSignature !== undefined) setTimeSignature((savedOpts.timeSignature as string) ?? '');
+          if (savedOpts.inferenceSteps !== undefined) setInferenceSteps(savedOpts.inferenceSteps as number);
+          if (savedOpts.model !== undefined) setDitModel(savedOpts.model as string);
+          if (savedOpts.thinking !== undefined) setThinking(savedOpts.thinking as boolean);
+          if (savedOpts.useCotCaption !== undefined) setUseCotCaption(savedOpts.useCotCaption as boolean);
+          if (savedOpts.useCotMetas !== undefined) setUseCotMetas(savedOpts.useCotMetas as boolean);
+          if (savedOpts.useCotLanguage !== undefined) setUseCotLanguage(savedOpts.useCotLanguage as boolean);
+          console.log('[GenreSelector] Restored saved advanced options:', savedOpts);
+        }
         setLoading(false);
       })
       .catch((err) => {
-        console.error('[GenreSelector] Failed to load genres:', err);
+        console.error('[GenreSelector] Failed to load data:', err);
         setLoading(false);
       });
   }, []);
@@ -95,6 +115,10 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
     const opts: AdvancedOptions = {
       inferenceSteps,
       model: ditModel,
+      thinking,
+      useCotCaption,
+      useCotMetas,
+      useCotLanguage,
     };
     if (timeSignature) opts.timeSignature = timeSignature;
     console.log('[GenreSelector] Starting radio with:', selectedGenre, keywordList, selectedLanguage, feeling, djName, opts);
@@ -272,24 +296,24 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
                 </span>
               </label>
               <div className="advanced-slider-wrapper">
-                <span className="advanced-slider__label">4</span>
+                <span className="advanced-slider__label">{INFERENCE_STEPS_MIN}</span>
                 <div className="advanced-slider__track-wrapper">
                   <input
                     type="range"
                     className="advanced-slider"
-                    min={4}
-                    max={16}
+                    min={INFERENCE_STEPS_MIN}
+                    max={INFERENCE_STEPS_MAX}
                     step={1}
                     value={inferenceSteps}
                     onChange={(e) => setInferenceSteps(Number(e.target.value))}
                   />
                   <div
                     className="advanced-slider__default-mark"
-                    style={{ left: `${((DEFAULT_INFERENCE_STEPS - 4) / 12) * 100}%` }}
+                    style={{ left: `${((DEFAULT_INFERENCE_STEPS - INFERENCE_STEPS_MIN) / (INFERENCE_STEPS_MAX - INFERENCE_STEPS_MIN)) * 100}%` }}
                     title="Default (8)"
                   />
                 </div>
-                <span className="advanced-slider__label">16</span>
+                <span className="advanced-slider__label">{INFERENCE_STEPS_MAX}</span>
               </div>
             </div>
 
@@ -305,6 +329,33 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
                   >
                     {m.label}
                   </button>
+                ))}
+              </div>
+            </div>
+
+            {/* ACE-Step CoT Flags */}
+            <div className="advanced-options__group">
+              <label className="advanced-options__label">ACE-Step CoT Flags</label>
+              <div className="advanced-cot-rows">
+                {([
+                  { key: 'thinking',       label: 'Thinking',     value: thinking,       set: setThinking },
+                  { key: 'useCotCaption',  label: 'CoT Caption',  value: useCotCaption,  set: setUseCotCaption },
+                  { key: 'useCotMetas',    label: 'CoT Metas',    value: useCotMetas,    set: setUseCotMetas },
+                  { key: 'useCotLanguage', label: 'CoT Language', value: useCotLanguage, set: setUseCotLanguage },
+                ] as { key: string; label: string; value: boolean; set: (v: boolean) => void }[]).map(({ key, label, value, set }) => (
+                  <div key={key} className="advanced-cot-row">
+                    <span className="advanced-cot-row__label">{label}</span>
+                    <div className="advanced-pills">
+                      <button
+                        className={`advanced-pill ${value ? 'advanced-pill--selected' : ''}`}
+                        onClick={() => set(true)}
+                      >On</button>
+                      <button
+                        className={`advanced-pill ${!value ? 'advanced-pill--selected' : ''}`}
+                        onClick={() => set(false)}
+                      >Off</button>
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>

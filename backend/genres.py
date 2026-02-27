@@ -25,6 +25,19 @@ GENRES = [
     {"id": "gospel",     "label": "Gospel",     "icon": "⛪", "subgenres": ["contemporary gospel", "traditional gospel", "gospel choir", "gospel R&B", "praise and worship"]},
     {"id": "ska",        "label": "Ska",        "icon": "🎺", "subgenres": ["two-tone ska", "ska punk", "traditional ska", "rocksteady", "third-wave ska"]},
     {"id": "bossanova",  "label": "Bossa Nova", "icon": "🌙", "subgenres": ["classic bossa nova", "modern bossa", "bossa jazz", "tropical bossa", "acoustic bossa"]},
+    # ── New 12 ────────────────────────────────────────────────────────────
+    {"id": "funk",       "label": "Funk",       "icon": "🕺", "subgenres": ["classic funk", "P-funk", "funk rock", "jazz funk", "neo-funk"]},
+    {"id": "indie",      "label": "Indie",      "icon": "🎶", "subgenres": ["indie rock", "indie pop", "indie folk", "dream pop", "shoegaze"]},
+    {"id": "house",      "label": "House",      "icon": "🏠", "subgenres": ["deep house", "tech house", "Chicago house", "progressive house", "soulful house"]},
+    {"id": "techno",     "label": "Techno",     "icon": "⚡", "subgenres": ["Detroit techno", "Berlin techno", "industrial techno", "minimal techno", "acid techno"]},
+    {"id": "dnb",        "label": "Drum & Bass","icon": "🥁", "subgenres": ["liquid DnB", "neurofunk", "jungle", "jump-up", "halftime"]},
+    {"id": "trap",       "label": "Trap",       "icon": "🔊", "subgenres": ["Atlanta trap", "trap soul", "Latin trap", "dark trap", "trap metal"]},
+    {"id": "flamenco",   "label": "Flamenco",   "icon": "💃", "subgenres": ["traditional flamenco", "flamenco fusion", "nuevo flamenco", "flamenco jazz", "flamencoPop"]},
+    {"id": "newage",     "label": "New Age",    "icon": "🔮", "subgenres": ["meditative", "healing", "space music", "nature sounds", "ambient new age"]},
+    {"id": "samba",      "label": "Samba",      "icon": "🎊", "subgenres": ["samba pagode", "samba enredo", "samba rock", "gafieira", "partido alto"]},
+    {"id": "bluegrass",  "label": "Bluegrass",  "icon": "🪕", "subgenres": ["traditional bluegrass", "progressive bluegrass", "newgrass", "Appalachian", "mountain music"]},
+    {"id": "opera",      "label": "Opera",      "icon": "🎭", "subgenres": ["Italian opera", "German opera", "baroque opera", "contemporary opera", "operetta"]},
+    {"id": "celtic",     "label": "Celtic",     "icon": "☘️", "subgenres": ["Irish traditional", "Scottish folk", "Celtic rock", "Celtic fusion", "Gaelic song"]},
 ]
 
 KEYWORDS = [
@@ -61,6 +74,27 @@ KEYWORDS = [
     {"id": "raw",         "label": "Raw",           "category": "texture"},
     {"id": "lush",        "label": "Lush",          "category": "texture"},
     {"id": "warm",        "label": "Warm",          "category": "texture"},
+    # ── Instrument ────────────────────────────────────────────────────────
+    {"id": "guitar",      "label": "Guitar",        "category": "instrument"},
+    {"id": "bass",        "label": "Bass",          "category": "instrument"},
+    {"id": "drums",       "label": "Drums",         "category": "instrument"},
+    {"id": "piano",       "label": "Piano",         "category": "instrument"},
+    {"id": "violin",      "label": "Violin",        "category": "instrument"},
+    {"id": "saxophone",   "label": "Saxophone",     "category": "instrument"},
+    {"id": "trumpet",     "label": "Trumpet",       "category": "instrument"},
+    {"id": "synthesizer", "label": "Synthesizer",   "category": "instrument"},
+    {"id": "cello",       "label": "Cello",         "category": "instrument"},
+    {"id": "flute",       "label": "Flute",         "category": "instrument"},
+    {"id": "harmonica",   "label": "Harmonica",     "category": "instrument"},
+    {"id": "banjo",       "label": "Banjo",         "category": "instrument"},
+    {"id": "organ",       "label": "Organ",         "category": "instrument"},
+    {"id": "harp",        "label": "Harp",          "category": "instrument"},
+    {"id": "mandolin",    "label": "Mandolin",      "category": "instrument"},
+    {"id": "ukulele",     "label": "Ukulele",       "category": "instrument"},
+    {"id": "trombone",    "label": "Trombone",      "category": "instrument"},
+    {"id": "marimba",     "label": "Marimba",       "category": "instrument"},
+    {"id": "sitar",       "label": "Sitar",         "category": "instrument"},
+    {"id": "accordion",   "label": "Accordion",     "category": "instrument"},
 ]
 
 LANGUAGES = [

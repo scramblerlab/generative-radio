@@ -74,6 +74,13 @@ async def get_genres():
     return {"genres": GENRES, "keywords": KEYWORDS, "languages": LANGUAGES}
 
 
+@app.get("/api/advanced-options")
+async def get_advanced_options():
+    """Return last-used advanced options so any browser connecting gets the same defaults."""
+    logger.debug("[main] GET /api/advanced-options")
+    return radio.saved_advanced_options
+
+
 @app.get("/api/radio/status")
 async def get_status():
     """Return current radio state and track info."""

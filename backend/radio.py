@@ -44,7 +44,8 @@ class RadioOrchestrator:
         self.keywords: list[str] = []
         self.language: str = "en"             # ISO 639-1 code or "instrumental"
         self.feeling: str = ""                # Free-text mood from user
-        self.advanced_options: dict = {}      # time_signature, inference_steps, model
+        self.advanced_options: dict = {}      # timeSignature, inferenceSteps, model, thinking, cot flags
+        self._saved_advanced_options: dict = {}  # persists across sessions for cross-browser recall
         self.history: list[str] = []          # Song titles played this session
 
         # Seed pinning ("More Like This")
@@ -139,6 +140,8 @@ class RadioOrchestrator:
         self.language = language
         self.feeling = feeling
         self.advanced_options = advanced_options or {}
+        if self.advanced_options:
+            self._saved_advanced_options = dict(self.advanced_options)
         self.history = []
         self.next_track = None
         self._stop_event.clear()
@@ -273,6 +276,8 @@ class RadioOrchestrator:
         self.language = language
         self.feeling = feeling
         self.advanced_options = advanced_options or {}
+        if self.advanced_options:
+            self._saved_advanced_options = dict(self.advanced_options)
         self.history = []        # Reset so new genre isn't biased by old session history
         self._pinned_seed = None  # Seed pinning doesn't make sense across a genre change
         self._last_seed = None
@@ -324,6 +329,11 @@ class RadioOrchestrator:
             )
             return
         await self.skip()
+
+    @property
+    def saved_advanced_options(self) -> dict:
+        """Last-used advanced options, persisted across sessions for cross-browser recall."""
+        return self._saved_advanced_options
 
     # ------------------------------------------------------------------ #
     # Internal helpers
@@ -670,6 +680,10 @@ class RadioOrchestrator:
                 inference_steps=opts.get("inferenceSteps", 8),
                 model=opts.get("model"),
                 seed=self._pinned_seed,
+                thinking=opts.get("thinking", True),
+                use_cot_caption=opts.get("useCotCaption", False),
+                use_cot_metas=opts.get("useCotMetas", False),
+                use_cot_language=opts.get("useCotLanguage", False),
             )
         finally:
             _progress_task.cancel()

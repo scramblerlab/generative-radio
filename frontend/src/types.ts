@@ -39,9 +39,13 @@ export interface SessionInfo {
 }
 
 export interface AdvancedOptions {
-  timeSignature?: string;   // "2", "3", "4", "6", or undefined (auto)
-  inferenceSteps: number;   // 4–16, default 8
-  model: string;            // "turbo", "turbo-shift1", "turbo-shift3", "turbo-continuous"
+  timeSignature?: string;    // "2", "3", "4", "6", or undefined (auto)
+  inferenceSteps: number;    // 4–100, default 8
+  model: string;             // "turbo", "turbo-shift1", "turbo-shift3", "turbo-continuous"
+  thinking: boolean;         // default true — semantic audio code generation
+  useCotCaption: boolean;    // default false — let LLM caption pass through unchanged
+  useCotMetas: boolean;      // default false — keep our BPM/key/duration
+  useCotLanguage: boolean;   // default false — use our explicit language
 }
 
 export interface Language {
