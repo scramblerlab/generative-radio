@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import random
 import time
 import uuid
 from typing import Any
@@ -10,6 +11,7 @@ from models import RadioState, TrackInfo, WSMessage, SongPrompt
 from llm import OllamaClient
 from acestep_client import ACEStepClient
 from config import mem_snapshot, get_progressive_duration
+from genres import GENRES
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,7 @@ class RadioOrchestrator:
         self.feeling: str = ""                # Free-text mood from user
         self.advanced_options: dict = {}      # timeSignature, inferenceSteps, model, thinking, cot flags
         self._saved_advanced_options: dict = {}  # persists across sessions for cross-browser recall
+        self._random_genre: bool = False     # True when controller selected "Random" mode
         self.history: list[str] = []          # Song titles played this session
 
         # Seed pinning ("More Like This")
@@ -135,7 +138,12 @@ class RadioOrchestrator:
             logger.info("[radio] Stopping existing session before starting new one")
             await self.stop()
 
-        self.genres = genres
+        if genres == ['__random__']:
+            self._random_genre = True
+            self.genres = []
+        else:
+            self._random_genre = False
+            self.genres = genres
         self.keywords = keywords
         self.language = language
         self.feeling = feeling
@@ -271,7 +279,12 @@ class RadioOrchestrator:
         )
 
         # Update settings (take effect for the next generated track onwards)
-        self.genres = genres
+        if genres == ['__random__']:
+            self._random_genre = True
+            self.genres = []
+        else:
+            self._random_genre = False
+            self.genres = genres
         self.keywords = keywords
         self.language = language
         self.feeling = feeling
@@ -622,12 +635,25 @@ class RadioOrchestrator:
         )
 
         # Step 1: LLM generates a structured song prompt
+        # Determine the genre(s) to use for this track
+        if self._random_genre:
+            _picked = random.choice(GENRES)
+            genres_for_llm = [_picked['id']]
+            genre_label = _picked['label']
+            logger.info(f"[radio] [{short_id}] Random genre picked: {genre_label}")
+        else:
+            genres_for_llm = self.genres
+            genre_label = next(
+                (g['label'] for g in GENRES if g['id'] == genres_for_llm[0]),
+                genres_for_llm[0] if genres_for_llm else "",
+            )
+
         await self._broadcast_progress("llm_thinking", "DJ is writing the next song prompt…")
         logger.info(f"[radio] [{short_id}] Before LLM    — {mem_snapshot()}")
         logger.info(f"[radio] [{short_id}] Calling LLM for song prompt...")
         t_llm = time.monotonic()
         song_prompt: SongPrompt = await self.llm.generate_prompt(
-            self.genres, self.keywords, self.history,
+            genres_for_llm, self.keywords, self.history,
             duration=target_duration, language=self.language,
             feeling=self.feeling,
         )
@@ -723,6 +749,7 @@ class RadioOrchestrator:
         return TrackInfo(
             id=track_id,
             song_title=song_prompt.song_title,
+            genre=genre_label,
             tags=song_prompt.tags,
             lyrics=song_prompt.lyrics,
             bpm=song_prompt.bpm,
@@ -739,6 +766,7 @@ class RadioOrchestrator:
         track_dict = {
             "id": track.id,
             "songTitle": track.song_title,
+            "genre": track.genre,
             "tags": track.tags,
             "lyrics": track.lyrics,
             "bpm": track.bpm,

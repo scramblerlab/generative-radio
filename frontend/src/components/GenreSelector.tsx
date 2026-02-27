@@ -41,6 +41,7 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [languages, setLanguages] = useState<Language[]>([]);
   const [selectedGenre, setSelectedGenre] = useState<string>('rock');
+  const [isRandomGenre, setIsRandomGenre] = useState(false);
   const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(new Set());
   const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
   const [feeling, setFeeling] = useState('');
@@ -98,7 +99,14 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
 
   const selectGenre = (id: string) => {
     console.log('[GenreSelector] Genre selected:', id);
+    setIsRandomGenre(false);
     setSelectedGenre(id);
+  };
+
+  const selectRandom = () => {
+    console.log('[GenreSelector] Random genre mode selected');
+    setIsRandomGenre(true);
+    setSelectedGenre('');
   };
 
   const toggleKeyword = (id: string) => {
@@ -121,8 +129,9 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
       useCotLanguage,
     };
     if (timeSignature) opts.timeSignature = timeSignature;
-    console.log('[GenreSelector] Starting radio with:', selectedGenre, keywordList, selectedLanguage, feeling, djName, opts);
-    onStart([selectedGenre], keywordList, selectedLanguage, feeling, djName, opts);
+    const genreArg = isRandomGenre ? ['__random__'] : [selectedGenre];
+    console.log('[GenreSelector] Starting radio with:', genreArg, keywordList, selectedLanguage, feeling, djName, opts);
+    onStart(genreArg, keywordList, selectedLanguage, feeling, djName, opts);
   };
 
   if (loading) {
@@ -163,6 +172,13 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
               {g.label}
             </button>
           ))}
+          <button
+            className={`genre-pill genre-pill--random ${isRandomGenre ? 'genre-pill--selected' : ''}`}
+            onClick={selectRandom}
+            aria-pressed={isRandomGenre}
+          >
+            🎲 Random
+          </button>
         </div>
       </section>
 
@@ -385,7 +401,7 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
         <button
           className="start-button"
           onClick={handleStart}
-          disabled={!selectedGenre}
+          disabled={!selectedGenre && !isRandomGenre}
         >
           {currentTrack ? 'Update Radio' : 'Start Radio'}
         </button>

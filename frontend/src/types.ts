@@ -11,6 +11,7 @@ export type ClientRole = 'controller' | 'viewer';
 export interface Track {
   id: string;
   songTitle: string;
+  genre: string;        // Human-readable label e.g. "Flamenco"
   tags: string;
   lyrics: string;
   bpm: number;
@@ -36,6 +37,7 @@ export interface SessionInfo {
   genre: string;
   keywords: string[];
   language: string;
+  isRandom: boolean;
 }
 
 export interface AdvancedOptions {

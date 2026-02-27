@@ -122,10 +122,19 @@ export function RadioPlayer({
       )}
 
       <div className="player__card">
-        {/* Controller identity badge */}
-        {!readonly && (
-          <div className="player__controller-badge">CONTROLLER</div>
-        )}
+        {/* Badges row: controller identity + genre */}
+        <div className="player__badges">
+          {!readonly && (
+            <div className="player__controller-badge">CONTROLLER</div>
+          )}
+          {track?.genre && (
+            <div className="player__genre-badge">
+              {sessionInfo?.isRandom
+                ? `RANDOM · ${track.genre.toUpperCase()}`
+                : track.genre.toUpperCase()}
+            </div>
+          )}
+        </div>
 
         {/* Now Playing */}
         <div className="player__now-playing">
@@ -142,11 +151,10 @@ export function RadioPlayer({
           ) : track ? (
             <div className="player__track-info">
               <h2 className="player__song-title">{track.songTitle}</h2>
-              {sessionInfo && (
+              {sessionInfo && (sessionInfo.keywords.length > 0 || sessionInfo.language) && (
                 <p className="player__session-info">
-                  {sessionInfo.genre}
-                  {sessionInfo.keywords.length > 0 && ` · ${sessionInfo.keywords.join(', ')}`}
-                  {` · ${sessionInfo.language === 'instrumental' ? 'Instrumental' : sessionInfo.language.toUpperCase()}`}
+                  {sessionInfo.keywords.length > 0 && sessionInfo.keywords.join(', ')}
+                  {sessionInfo.language && ` · ${sessionInfo.language === 'instrumental' ? 'Instrumental' : sessionInfo.language.toUpperCase()}`}
                 </p>
               )}
               <p className="player__tags">{track.tags}</p>

@@ -17,7 +17,8 @@ export default function App() {
     genres: string[], keywords: string[], language: string,
     feeling: string, name: string, advancedOptions?: AdvancedOptions,
   ) => {
-    setSessionInfo({ genre: genres[0] ?? '', keywords, language });
+    const isRandom = genres[0] === '__random__';
+    setSessionInfo({ genre: isRandom ? '' : genres[0] ?? '', keywords, language, isRandom });
     setDjName(name);
     setView('player');
     if (radio.currentTrack !== null) {
@@ -37,6 +38,14 @@ export default function App() {
     // Do NOT stop — audio keeps playing while controller browses genres
     setView('selector');
   };
+
+  // Keep sessionInfo.genre in sync with the actual genre used for each track.
+  // This is essential in Random mode where the genre changes per-track.
+  useEffect(() => {
+    if (radio.currentTrack?.genre) {
+      setSessionInfo(prev => prev ? { ...prev, genre: radio.currentTrack!.genre } : prev);
+    }
+  }, [radio.currentTrack?.id]);
 
   // When a viewer is promoted to controller while a session is active, automatically
   // show the player view so they see the current track with full controls.
