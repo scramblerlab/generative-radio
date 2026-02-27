@@ -122,19 +122,15 @@ export function RadioPlayer({
       )}
 
       <div className="player__card">
-        {/* Badges row: controller identity + genre */}
-        <div className="player__badges">
-          {!readonly && (
-            <div className="player__controller-badge">CONTROLLER</div>
-          )}
-          {track?.genre && (
-            <div className="player__genre-badge">
-              {sessionInfo?.isRandom
-                ? `RANDOM · ${track.genre.toUpperCase()}`
-                : track.genre.toUpperCase()}
-            </div>
-          )}
-        </div>
+        {/* Single badge: shows controller prefix for host, genre info for all */}
+        {track?.genre && (
+          <div className="player__controller-badge">
+            {!readonly && `CONTROLLER :: `}
+            {sessionInfo?.isRandom
+              ? `RANDOM · ${track.genre.toUpperCase()}`
+              : track.genre.toUpperCase()}
+          </div>
+        )}
 
         {/* Now Playing */}
         <div className="player__now-playing">
