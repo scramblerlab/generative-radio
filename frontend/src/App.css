@@ -377,6 +377,26 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   color: var(--text);
 }
 
+/* CoT flag toggle rows */
+.advanced-cot-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.advanced-cot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.advanced-cot-row__label {
+  font-size: 13px;
+  color: var(--text-dim);
+  min-width: 90px;
+}
+
 /* Inference steps slider */
 .advanced-slider-wrapper {
   display: flex;

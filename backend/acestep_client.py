@@ -43,6 +43,10 @@ class ACEStepClient:
         inference_steps: int = 8,
         model: str | None = None,
         seed: str | None = None,
+        thinking: bool = True,
+        use_cot_caption: bool = False,
+        use_cot_metas: bool = False,
+        use_cot_language: bool = False,
     ) -> str:
         """POST /release_task — submit a music generation job, return task_id.
 
@@ -57,10 +61,10 @@ class ACEStepClient:
             "key_scale": prompt.key_scale,
             "audio_duration": prompt.duration,
             "vocal_language": ace_language,
-            "thinking": True,           # Generates semantic audio codes (melody/orchestration) for DiT
-            "use_cot_caption": False,   # Don't rewrite our caption — we craft it via Ollama LLM
-            "use_cot_metas": False,     # Don't override our BPM/key/duration — already provided
-            "use_cot_language": False,   # Don't re-detect language — we pass it explicitly
+            "thinking": thinking,
+            "use_cot_caption": use_cot_caption,
+            "use_cot_metas": use_cot_metas,
+            "use_cot_language": use_cot_language,
             "batch_size": 1,
             "audio_format": "mp3",
             "inference_steps": inference_steps,
@@ -190,6 +194,10 @@ class ACEStepClient:
         inference_steps: int = 8,
         model: str | None = None,
         seed: str | None = None,
+        thinking: bool = True,
+        use_cot_caption: bool = False,
+        use_cot_metas: bool = False,
+        use_cot_language: bool = False,
     ) -> tuple[bytes, dict]:
         """Full pipeline: submit → poll → download.
 
@@ -204,6 +212,10 @@ class ACEStepClient:
             inference_steps=inference_steps,
             model=model,
             seed=seed,
+            thinking=thinking,
+            use_cot_caption=use_cot_caption,
+            use_cot_metas=use_cot_metas,
+            use_cot_language=use_cot_language,
         )
         result = await self.poll_task(task_id, song_title=prompt.song_title)
 
