@@ -46,6 +46,7 @@ class TrackInfo(BaseModel):
     id: str
     song_title: str
     genre: str          # Human-readable genre label e.g. "Flamenco"
+    is_random: bool = False  # True when genre was picked randomly
     tags: str
     lyrics: str
     bpm: int
