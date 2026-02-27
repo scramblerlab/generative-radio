@@ -783,25 +783,14 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  align-self: flex-start;  /* prevent stretching to full card width in flex column parent */
   margin-bottom: 16px;
 }
 
-/* Controller badge */
-.player__controller-badge {
-  align-self: flex-start;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-  color: var(--accent);
-  border: 2px solid var(--accent);
-  border-radius: var(--radius-sm);
-  padding: 4px 10px;
-  text-transform: uppercase;
-}
-
-/* Genre badge — same visual as controller badge */
+/* Controller badge + genre badge — identical style */
+.player__controller-badge,
 .player__genre-badge {
-  align-self: flex-start;
+  font-family: var(--font-body);
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.18em;
