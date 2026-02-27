@@ -12,6 +12,7 @@ export interface Track {
   id: string;
   songTitle: string;
   genre: string;        // Human-readable label e.g. "Flamenco"
+  isRandom: boolean;    // True when genre was picked randomly by the backend
   tags: string;
   lyrics: string;
   bpm: number;

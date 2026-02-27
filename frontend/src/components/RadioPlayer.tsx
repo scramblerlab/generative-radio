@@ -126,7 +126,7 @@ export function RadioPlayer({
         {track?.genre && (
           <div className="player__controller-badge">
             {!readonly && `CONTROLLER :: `}
-            {sessionInfo?.isRandom
+            {track.isRandom
               ? `RANDOM · ${track.genre.toUpperCase()}`
               : track.genre.toUpperCase()}
           </div>
