@@ -121,9 +121,31 @@ export function RadioPlayer({
       {readonly ? (
         <div className="player__viewer-badge">Now Listening</div>
       ) : (
-        <button className="player__back" onClick={onBack} title="Change genres">
-          ← Change genres
-        </button>
+        <div className="player__top-bar">
+          <button className="player__back" onClick={onBack} title="Change genres">
+            ← Change genres
+          </button>
+          {onSaveTrack && track && (
+            <button
+              className={`player__save-track player__save-track--${saveState}`}
+              disabled={saveState === 'saving'}
+              title="Save this track's MP3 and metadata to saved_tracks/"
+              onClick={async () => {
+                setSaveState('saving');
+                try {
+                  await onSaveTrack();
+                  setSaveState('idle');
+                  setShowSaveDialog(true);
+                } catch {
+                  setSaveState('error');
+                  setTimeout(() => setSaveState('idle'), 2000);
+                }
+              }}
+            >
+              {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? '⚠ Error' : 'Save Track'}
+            </button>
+          )}
+        </div>
       )}
 
       <div className="player__card">
@@ -201,38 +223,6 @@ export function RadioPlayer({
           </div>
         )}
 
-        {/* Controller-only: save current track to disk */}
-        {!readonly && onSaveTrack && track && (
-          <button
-            className={`player__save-track player__save-track--${saveState}`}
-            disabled={saveState === 'saving'}
-            title="Save this track's MP3 and metadata to saved_tracks/"
-            onClick={async () => {
-              setSaveState('saving');
-              try {
-                await onSaveTrack();
-                setSaveState('idle');
-                setShowSaveDialog(true);
-              } catch {
-                setSaveState('error');
-                setTimeout(() => setSaveState('idle'), 2000);
-              }
-            }}
-          >
-            {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? '⚠ Error' : 'Save Track'}
-          </button>
-        )}
-
-        {/* Save confirmation dialog */}
-        {showSaveDialog && (
-          <div className="save-dialog-overlay" onClick={() => setShowSaveDialog(false)}>
-            <div className="save-dialog" onClick={e => e.stopPropagation()}>
-              <p className="save-dialog__msg">✓ Successfully Saved!</p>
-              <button className="save-dialog__ok" onClick={() => setShowSaveDialog(false)}>OK</button>
-            </div>
-          </div>
-        )}
-
         {/* Controller-only: invite description + viewer list */}
         {!readonly && (
           <>
@@ -260,6 +250,16 @@ export function RadioPlayer({
           </>
         )}
       </div>
+
+      {/* Save confirmation dialog */}
+      {showSaveDialog && (
+        <div className="save-dialog-overlay" onClick={() => setShowSaveDialog(false)}>
+          <div className="save-dialog" onClick={e => e.stopPropagation()}>
+            <p className="save-dialog__msg">✓ Successfully Saved!</p>
+            <button className="save-dialog__ok" onClick={() => setShowSaveDialog(false)}>OK</button>
+          </div>
+        </div>
+      )}
 
       <StatusBar status={status} message={statusMessage} nextReady={nextReady} listenerCount={listenerCount} />
 
