@@ -106,7 +106,8 @@ export function RadioPlayer({
   onBack,
   onUnblockAudio,
 }: RadioPlayerProps) {
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'error'>('idle');
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
 
   // Reset save state when the track changes
   useEffect(() => {
@@ -210,19 +211,26 @@ export function RadioPlayer({
               setSaveState('saving');
               try {
                 await onSaveTrack();
-                setSaveState('saved');
-                setTimeout(() => setSaveState('idle'), 2000);
+                setSaveState('idle');
+                setShowSaveDialog(true);
               } catch {
                 setSaveState('error');
                 setTimeout(() => setSaveState('idle'), 2000);
               }
             }}
           >
-            <span className="player__save-track-icon">
-              {saveState === 'saved' ? '✓' : saveState === 'error' ? '⚠' : '👍'}
-            </span>
-            {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved!' : saveState === 'error' ? 'Error' : 'Save Track'}
+            {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? '⚠ Error' : 'Save Track'}
           </button>
+        )}
+
+        {/* Save confirmation dialog */}
+        {showSaveDialog && (
+          <div className="save-dialog-overlay" onClick={() => setShowSaveDialog(false)}>
+            <div className="save-dialog" onClick={e => e.stopPropagation()}>
+              <p className="save-dialog__msg">✓ Successfully Saved!</p>
+              <button className="save-dialog__ok" onClick={() => setShowSaveDialog(false)}>OK</button>
+            </div>
+          </div>
         )}
 
         {/* Controller-only: invite description + viewer list */}
