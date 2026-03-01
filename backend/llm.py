@@ -118,7 +118,7 @@ IMPORTANT:
 
 LYRICS RULES:
 - {lyrics_rule}
-- Use ACE-Step structure tags: [Intro], [Verse], [Verse 1], [Verse 2], [Pre-Chorus], [Chorus], [Bridge], [Outro]
+- Use ACE-Step structure tags: [Intro], [Verse], [Verse 1], [Verse 2], [Pre-Chorus], [Chorus], [Bridge], [Outro], [Fade Out]
 - {'Set lyrics to an empty string.' if is_instrumental else 'Include 3-5 sections. Always include at least one [Verse] and one [Chorus].'}
 - {'Skip this rule.' if is_instrumental else 'You may add [Instrumental], [Guitar Solo], or [Piano Interlude] for breaks.'}
 - {'Skip this rule.' if is_instrumental else 'You may combine a tag with ONE style modifier: [Chorus - anthemic], [Bridge - whispered], [Verse - spoken word]'}
@@ -128,6 +128,7 @@ LYRICS RULES:
 - {'Skip this rule.' if is_instrumental else 'Use parentheses for background vocals: "Into the light (into the light)"'}
 - {'Skip this rule.' if is_instrumental else 'Stick to one core metaphor per song for lyrical cohesion.'}
 - {'Skip this rule.' if is_instrumental else 'Lyrics should be creative and evocative, not generic or clichéd. Avoid adjective stacking and mixed metaphors.'}
+- {'The last section tag must always be [Fade Out] as a standalone tag with no lyrics under it — this signals ACE-Step to end the track with a natural fade.' if is_instrumental else 'The last section must always be [Fade Out]. It may contain a short repeating hook, ad-libs, or humming that fades out — or leave it as a standalone tag for a pure instrumental fade.'}
 
 METADATA RULES:
 - BPM must match the genre and mood naturally
