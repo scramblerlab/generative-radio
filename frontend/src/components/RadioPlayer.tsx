@@ -149,7 +149,7 @@ export function RadioPlayer({
 
       {/* Save toast */}
       {showToast && (
-        <div className="save-toast">✓ Track saved</div>
+        <div className="player__save-toast">✓ Track saved</div>
       )}
 
       <div className="player__card">
