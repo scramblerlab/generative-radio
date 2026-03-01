@@ -801,79 +801,40 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   text-transform: uppercase;
 }
 
-/* Save Track button */
+/* Save Track button — inherits same look as Change genres */
 .player__save-track {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 14px;
-  border: none;
-  border-radius: var(--radius-pill);
-  background: #e2e8f0;
-  color: #1e293b;
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 4px 0;
+  transition: color 0.15s;
+  text-align: right;
 }
-.player__save-track:not(:disabled):hover {
-  background: #cbd5e1;
-}
-.player__save-track--error {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-}
-.player__save-track:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
+.player__save-track:not(:disabled):hover { color: var(--text); }
+.player__save-track--error { color: var(--red); }
+.player__save-track:disabled { opacity: 0.5; }
 
-/* Save confirmation dialog */
-.save-dialog-overlay {
+/* Save toast */
+.save-toast {
   position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-
-.save-dialog {
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
   background: var(--surface);
-  border: 1.5px solid var(--border);
-  border-radius: var(--radius);
-  padding: 28px 32px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 20px;
-  box-shadow: var(--shadow);
-  min-width: 220px;
-}
-
-.save-dialog__msg {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--green);
-  text-align: center;
-}
-
-.save-dialog__ok {
-  padding: 8px 28px;
-  background: #e2e8f0;
-  color: #1e293b;
-  border: none;
+  border: 1.5px solid var(--green);
   border-radius: var(--radius-pill);
-  font-family: inherit;
+  padding: 10px 24px;
   font-size: 13px;
   font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
+  color: var(--green);
+  box-shadow: var(--shadow);
+  z-index: 100;
+  white-space: nowrap;
+  animation: toast-in 0.2s ease;
 }
-.save-dialog__ok:hover {
-  background: #cbd5e1;
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 /* Invite text */

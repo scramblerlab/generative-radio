@@ -107,7 +107,7 @@ export function RadioPlayer({
   onUnblockAudio,
 }: RadioPlayerProps) {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'error'>('idle');
-  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [showToast, setShowToast] = useState(false);
 
   // Reset save state when the track changes
   useEffect(() => {
@@ -135,7 +135,8 @@ export function RadioPlayer({
                 try {
                   await onSaveTrack();
                   setSaveState('idle');
-                  setShowSaveDialog(true);
+                  setShowToast(true);
+                  setTimeout(() => setShowToast(false), 3000);
                 } catch {
                   setSaveState('error');
                   setTimeout(() => setSaveState('idle'), 2000);
@@ -251,14 +252,9 @@ export function RadioPlayer({
         )}
       </div>
 
-      {/* Save confirmation dialog */}
-      {showSaveDialog && (
-        <div className="save-dialog-overlay" onClick={() => setShowSaveDialog(false)}>
-          <div className="save-dialog" onClick={e => e.stopPropagation()}>
-            <p className="save-dialog__msg">✓ Successfully Saved!</p>
-            <button className="save-dialog__ok" onClick={() => setShowSaveDialog(false)}>OK</button>
-          </div>
-        </div>
+      {/* Save toast */}
+      {showToast && (
+        <div className="save-toast">✓ Track saved</div>
       )}
 
       <StatusBar status={status} message={statusMessage} nextReady={nextReady} listenerCount={listenerCount} />
