@@ -101,8 +101,6 @@ export function RadioPlayer({
   sessionInfo,
   djName = '',
   onSaveTrack,
-  onStop,
-  onRewind,
   onBack,
   onUnblockAudio,
 }: RadioPlayerProps) {
@@ -123,11 +121,11 @@ export function RadioPlayer({
       ) : (
         <div className="player__top-bar">
           <button className="player__back" onClick={onBack} title="Change genres">
-            ← Change genres
+            ← Change Genres
           </button>
           {onSaveTrack && track && (
             <button
-              className={`player__save-track player__save-track--${saveState}`}
+              className={`player__save-track`}
               disabled={saveState === 'saving'}
               title="Save this track's MP3 and metadata to saved_tracks/"
               onClick={async () => {
@@ -143,10 +141,15 @@ export function RadioPlayer({
                 }
               }}
             >
-              {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? '⚠ Error' : 'Save Track'}
+              Save Track
             </button>
           )}
         </div>
+      )}
+
+      {/* Save toast */}
+      {showToast && (
+        <div className="save-toast">✓ Track saved</div>
       )}
 
       <div className="player__card">
@@ -251,11 +254,6 @@ export function RadioPlayer({
           </>
         )}
       </div>
-
-      {/* Save toast */}
-      {showToast && (
-        <div className="save-toast">✓ Track saved</div>
-      )}
 
       <StatusBar status={status} message={statusMessage} nextReady={nextReady} listenerCount={listenerCount} />
 

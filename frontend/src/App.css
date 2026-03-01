@@ -564,7 +564,15 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   transition: color 0.15s;
   text-align: left;
 }
+.player__save-track {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 4px 0;
+  transition: color 0.15s;
+  text-align: left;
+}
 .player__back:hover { color: var(--text); }
+.player__save-track:hover { color: var(--text); }
 
 .player__viewer-badge {
   font-size: 12px;
