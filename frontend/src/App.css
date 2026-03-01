@@ -550,6 +550,13 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   gap: 16px;
 }
 
+.player__top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .player__back {
   font-size: 13px;
   color: var(--text-muted);
@@ -799,8 +806,7 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-top: 18px;
-  padding: 9px 18px;
+  padding: 6px 14px;
   border: none;
   border-radius: var(--radius-pill);
   background: #e2e8f0;
@@ -810,7 +816,6 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
-  align-self: center;
 }
 .player__save-track:not(:disabled):hover {
   background: #cbd5e1;
