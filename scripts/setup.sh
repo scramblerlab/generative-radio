@@ -46,10 +46,8 @@ fi
 # ollama pull requires the server to be running.
 # Start it temporarily if it isn't already, and clean up afterwards.
 echo ""
-echo "  Pulling LLM models (this may take several minutes):"
-echo "    qwen3:8b  — used on machines with <32GB unified memory"
-echo "    qwen3:14b — used on machines with >=32GB unified memory"
-echo "  The correct model is auto-selected at runtime via config.py."
+echo "  Pulling LLM model (this may take several minutes):"
+echo "    qwen3:8b  — used for all song prompt generation"
 echo ""
 echo "  Note: 'MLX dynamic library not available' warnings from Ollama are"
 echo "  harmless — it falls back to Metal automatically."
@@ -79,7 +77,6 @@ else
 fi
 
 ollama pull qwen3:8b
-ollama pull qwen3:14b
 
 # Stop the temporary Ollama instance if we started it
 if [[ -n "$SETUP_OLLAMA_PID" ]]; then

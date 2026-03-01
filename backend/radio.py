@@ -51,14 +51,13 @@ class RadioOrchestrator:
         self._random_genre: bool = False     # True when controller selected "Random" mode
         self.history: list[str] = []          # Song titles played this session
 
-        # Seed pinning ("More Like This")
-        self._last_seed: str | None = None    # Seed from the most recent ACE-Step result
-        self._pinned_seed: str | None = None  # When set, reuse this seed for all generations
-
         # Track management
         self.current_track: TrackInfo | None = None
         self.next_track: TrackInfo | None = None   # Pre-buffered; already sent to frontend as isNext=True
-        self.audio_cache: dict[str, bytes] = {}    # track_id → raw MP3 bytes
+        self.audio_cache: dict[str, bytes] = {}       # track_id → raw MP3 bytes
+        self.prompt_cache: dict[str, SongPrompt] = {}  # track_id → SongPrompt (for save)
+        self.seed_cache: dict[str, str] = {}           # track_id → ACE-Step seed (for save)
+        self.track_info_cache: dict[str, TrackInfo] = {}  # track_id → TrackInfo (for save)
 
         # Async primitives
         self._task: asyncio.Task | None = None
@@ -110,8 +109,7 @@ class RadioOrchestrator:
 
         if ws == self._controller_ws:
             self._controller_ws = None
-            self._pinned_seed = None
-            logger.info("[radio] Controller disconnected — seed unpinned")
+            logger.info("[radio] Controller disconnected")
             prebuffer_active = (
                 self._prebuffer_task is not None and not self._prebuffer_task.done()
             )
@@ -156,10 +154,11 @@ class RadioOrchestrator:
         self._track_ended_event.clear()
         self._next_track_ready_event.clear()
         self.audio_cache.clear()
+        self.prompt_cache.clear()
+        self.seed_cache.clear()
+        self.track_info_cache.clear()
         self._last_track_ended_at = 0.0
         self._pending_promotion = False
-        self._last_seed = None
-        self._pinned_seed = None
 
         logger.info(f"[radio] Starting session — genres: {genres}, keywords: {keywords}, language: {language}, feeling: {feeling[:50]!r}, advanced: {self.advanced_options}")
         self._task = asyncio.create_task(self._radio_loop(), name="radio-loop")
@@ -184,8 +183,9 @@ class RadioOrchestrator:
         self.current_track = None
         self.next_track = None
         self.audio_cache.clear()
-        self._pinned_seed = None
-        self._last_seed = None
+        self.prompt_cache.clear()
+        self.seed_cache.clear()
+        self.track_info_cache.clear()
         logger.info("[radio] Session stopped and cleaned up")
 
     async def skip(self) -> None:
@@ -235,20 +235,6 @@ class RadioOrchestrator:
             return
         await self.start(genres, keywords, language, feeling, advanced_options)
 
-    async def pin_seed_from_ws(self, ws: WebSocket, seed: str) -> None:
-        """Pin a seed for subsequent generations — controller only."""
-        if ws != self._controller_ws:
-            return
-        self._pinned_seed = seed
-        logger.info(f"[radio] Seed pinned: {seed}")
-
-    async def unpin_seed_from_ws(self, ws: WebSocket) -> None:
-        """Unpin the seed — controller only."""
-        if ws != self._controller_ws:
-            return
-        self._pinned_seed = None
-        logger.info("[radio] Seed unpinned")
-
     async def stop_from_ws(self, ws: WebSocket) -> None:
         """Stop the radio session — authorised only for the current controller."""
         if ws != self._controller_ws:
@@ -292,13 +278,15 @@ class RadioOrchestrator:
         if self.advanced_options:
             self._saved_advanced_options = dict(self.advanced_options)
         self.history = []        # Reset so new genre isn't biased by old session history
-        self._pinned_seed = None  # Seed pinning doesn't make sense across a genre change
-        self._last_seed = None
 
         # Discard any pre-buffered next track — it was generated with old settings
         self._cancel_prebuffer()
         if self.next_track:
-            self.audio_cache.pop(self.next_track.id, None)
+            _discard_id = self.next_track.id
+            self.audio_cache.pop(_discard_id, None)
+            self.prompt_cache.pop(_discard_id, None)
+            self.seed_cache.pop(_discard_id, None)
+            self.track_info_cache.pop(_discard_id, None)
             logger.info(
                 f"[radio] Discarded pre-buffered track '{self.next_track.song_title}' (old settings)"
             )
@@ -537,7 +525,10 @@ class RadioOrchestrator:
                     self._next_track_ready_event.clear()
                     if old_id:
                         self.audio_cache.pop(old_id, None)
-                        logger.debug(f"[radio] Evicted audio cache for finished track: {old_id}")
+                        self.prompt_cache.pop(old_id, None)
+                        self.seed_cache.pop(old_id, None)
+                        self.track_info_cache.pop(old_id, None)
+                        logger.debug(f"[radio] Evicted caches for finished track: {old_id}")
                     self.state = RadioState.PLAYING
                     await self._broadcast_status("playing", "Playing — generating next track...")
                 else:
@@ -558,7 +549,10 @@ class RadioOrchestrator:
                     self.current_track = track
                     if old_id:
                         self.audio_cache.pop(old_id, None)
-                        logger.debug(f"[radio] Evicted audio cache for finished track: {old_id}")
+                        self.prompt_cache.pop(old_id, None)
+                        self.seed_cache.pop(old_id, None)
+                        self.track_info_cache.pop(old_id, None)
+                        logger.debug(f"[radio] Evicted caches for finished track: {old_id}")
                     self.state = RadioState.PLAYING
 
                     logger.info(f"[radio] Buffering done — now playing: '{track.song_title}'")
@@ -682,8 +676,7 @@ class RadioOrchestrator:
         )
         opts = self.advanced_options
         logger.info(
-            f"[radio] [{short_id}] Sending to ACE-Step — "
-            f"advanced_options: {opts}, pinned_seed: {self._pinned_seed or 'none'}"
+            f"[radio] [{short_id}] Sending to ACE-Step — advanced_options: {opts}"
         )
         t_ace = time.monotonic()
 
@@ -705,7 +698,7 @@ class RadioOrchestrator:
                 time_signature=opts.get("timeSignature"),
                 inference_steps=opts.get("inferenceSteps", 8),
                 model=opts.get("model"),
-                seed=self._pinned_seed,
+                seed=None,
                 thinking=opts.get("thinking", True),
                 use_cot_caption=opts.get("useCotCaption", False),
                 use_cot_metas=opts.get("useCotMetas", False),
@@ -716,10 +709,9 @@ class RadioOrchestrator:
             with contextlib.suppress(asyncio.CancelledError):
                 await _progress_task
 
-        # Capture seed from ACE-Step result for "More Like This"
+        # Capture seed from ACE-Step result (stored per track for Save Track)
         result_seed = str(result_meta.get("seed_value", ""))
         if result_seed:
-            self._last_seed = result_seed
             logger.info(f"[radio] [{short_id}] Captured seed from result: {result_seed}")
         else:
             logger.warning(f"[radio] [{short_id}] No seed_value in ACE-Step result metadata")
@@ -739,6 +731,8 @@ class RadioOrchestrator:
         # Step 3: Cache audio bytes and build TrackInfo
         track_id = str(uuid.uuid4())
         self.audio_cache[track_id] = audio_bytes
+        self.prompt_cache[track_id] = song_prompt
+        self.seed_cache[track_id] = result_seed
         logger.info(f"[radio] [{short_id}] Cached as track_id: {track_id}")
 
         # Keep session history bounded (last 20 titles)
@@ -746,7 +740,7 @@ class RadioOrchestrator:
         if len(self.history) > 20:
             self.history = self.history[-20:]
 
-        return TrackInfo(
+        track_info = TrackInfo(
             id=track_id,
             song_title=song_prompt.song_title,
             genre=genre_label,
@@ -758,6 +752,8 @@ class RadioOrchestrator:
             duration=song_prompt.duration,
             audio_url=f"/api/audio/{track_id}",
         )
+        self.track_info_cache[track_id] = track_info
+        return track_info
 
     # ------------------------------------------------------------------ #
     # WebSocket broadcast helpers
@@ -778,10 +774,7 @@ class RadioOrchestrator:
         }
         label = "next (pre-buffered)" if is_next else "current (play now)"
         logger.info(f"[radio] Broadcasting track_ready — '{track.song_title}' [{label}]")
-        data: dict = {"track": track_dict, "isNext": is_next}
-        if self._last_seed:
-            data["seed"] = self._last_seed
-        await self.broadcast(WSMessage(event="track_ready", data=data))
+        await self.broadcast(WSMessage(event="track_ready", data={"track": track_dict, "isNext": is_next}))
 
     async def _broadcast_status(self, state: str, message: str) -> None:
         logger.debug(f"[radio] Status broadcast: [{state}] {message}")

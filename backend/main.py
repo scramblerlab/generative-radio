@@ -1,5 +1,9 @@
+import json
 import logging
+import re
 from contextlib import asynccontextmanager
+from datetime import datetime
+from pathlib import Path
 from typing import AsyncGenerator
 
 # Configure logging before any other imports so all modules inherit this format.
@@ -9,7 +13,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -114,6 +118,9 @@ def _iter_audio(data: bytes, chunk_size: int = 65_536):
         yield data[i:i + chunk_size]
 
 
+SAVED_TRACKS_DIR = Path(__file__).parent.parent / "saved_tracks"
+
+
 @app.get("/api/audio/{track_id}")
 async def get_audio(track_id: str):
     """Serve a cached audio file by track ID.
@@ -138,6 +145,59 @@ async def get_audio(track_id: str):
             "Cache-Control": "public, max-age=3600",
         },
     )
+
+
+@app.post("/api/tracks/{track_id}/save")
+async def save_track(track_id: str):
+    """Save the track's MP3 and a JSON metadata file to the saved_tracks/ directory."""
+    logger.info(f"[main] POST /api/tracks/{track_id}/save")
+    audio_bytes = radio.audio_cache.get(track_id)
+    if not audio_bytes:
+        raise HTTPException(status_code=404, detail="Track not found in cache")
+
+    prompt = radio.prompt_cache.get(track_id)
+    track_info = radio.track_info_cache.get(track_id)
+    if not prompt or not track_info:
+        raise HTTPException(status_code=404, detail="Track metadata not found")
+
+    seed = radio.seed_cache.get(track_id, "")
+    SAVED_TRACKS_DIR.mkdir(exist_ok=True)
+
+    safe_title = re.sub(r'[^\w\s-]', '', track_info.song_title).strip()
+    safe_title = re.sub(r'\s+', '_', safe_title)[:50]
+    dt_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    base_name = f"{safe_title}.{dt_str}"
+
+    mp3_path = SAVED_TRACKS_DIR / f"{base_name}.mp3"
+    mp3_path.write_bytes(audio_bytes)
+
+    metadata = {
+        "trackId": track_id,
+        "savedAt": datetime.now().isoformat(),
+        "songTitle": track_info.song_title,
+        "genre": track_info.genre,
+        "isRandom": track_info.is_random,
+        "bpm": track_info.bpm,
+        "keyScale": track_info.key_scale,
+        "duration": track_info.duration,
+        "language": radio.language,
+        "keywords": radio.keywords,
+        "style": prompt.style,
+        "instruments": prompt.instruments,
+        "mood": prompt.mood,
+        "vocalStyle": prompt.vocal_style,
+        "production": prompt.production,
+        "lyrics": prompt.lyrics,
+        "tags": prompt.tags,
+        "seed": seed,
+        "advancedOptions": radio.advanced_options,
+        "audioFile": f"{base_name}.mp3",
+    }
+    json_path = SAVED_TRACKS_DIR / f"{base_name}.json"
+    json_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False))
+
+    logger.info(f"[main] Track saved: {base_name}")
+    return {"mp3": str(mp3_path), "json": str(json_path), "baseName": base_name}
 
 
 # ------------------------------------------------------------------ #
@@ -181,12 +241,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
             elif event == "skip":
                 await radio.skip_from_ws(websocket)
-            elif event == "pin_seed":
-                seed = data.get("data", {}).get("seed", "")
-                if seed:
-                    await radio.pin_seed_from_ws(websocket, seed)
-            elif event == "unpin_seed":
-                await radio.unpin_seed_from_ws(websocket)
             else:
                 logger.warning(f"[main] Unknown WS event from client: {event}")
 

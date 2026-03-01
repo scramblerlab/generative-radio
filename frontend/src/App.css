@@ -792,35 +792,45 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   text-transform: uppercase;
 }
 
-/* More Like This toggle */
-.player__more-like-this {
+/* Save Track button */
+.player__save-track {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 18px;
   padding: 9px 18px;
-  border: 1.5px solid var(--border);
+  border: 1.5px solid var(--accent);
   border-radius: var(--radius-pill);
-  background: var(--surface-2);
-  color: var(--text-muted);
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
   font-size: 12px;
   font-weight: 600;
+  cursor: pointer;
   transition: border-color 0.15s, background 0.15s, color 0.15s;
   align-self: center;
 }
-.player__more-like-this:not(:disabled):hover {
-  border-color: var(--border-2);
-  color: var(--text);
+.player__save-track:not(:disabled):hover {
+  background: var(--accent);
+  color: #000;
 }
-.player__more-like-this--active {
-  border-color: var(--accent);
-  background: var(--accent-dim);
-  color: var(--text);
+.player__save-track--saved {
+  border-color: var(--green);
+  color: var(--green);
 }
-.player__more-like-this:disabled {
-  opacity: 0.3;
+.player__save-track--saved:not(:disabled):hover {
+  background: var(--green);
+  color: #000;
 }
-.player__more-like-this-icon {
+.player__save-track--error {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+.player__save-track:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.player__save-track-icon {
   font-size: 14px;
 }
 

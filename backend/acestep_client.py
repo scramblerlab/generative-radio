@@ -5,6 +5,7 @@ import time
 from urllib.parse import urlparse, parse_qs
 
 import httpx
+from config import DURATION_OVERRUN_S
 from models import SongPrompt
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ class ACEStepClient:
             "lyrics": prompt.lyrics,
             "bpm": prompt.bpm,
             "key_scale": prompt.key_scale,
-            "audio_duration": prompt.duration,
+            "audio_duration": prompt.duration + DURATION_OVERRUN_S,
             "vocal_language": ace_language,
             "thinking": thinking,
             "use_cot_caption": use_cot_caption,
@@ -79,7 +80,7 @@ class ACEStepClient:
             payload["use_random_seed"] = False
         logger.info(
             f"[acestep] '{prompt.song_title}' — submitting task "
-            f"(bpm: {prompt.bpm}, key: {prompt.key_scale}, duration: {prompt.duration}s, "
+            f"(bpm: {prompt.bpm}, key: {prompt.key_scale}, duration: {prompt.duration}s + {DURATION_OVERRUN_S}s overrun, "
             f"steps: {inference_steps}, model: {model or 'default'}, "
             f"time_sig: {time_signature or 'auto'}, seed: {seed or 'random'})"
         )

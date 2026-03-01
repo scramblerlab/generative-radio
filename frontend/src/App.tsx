@@ -81,9 +81,9 @@ export default function App() {
             progress={radio.progress}
             listenerCount={radio.listenerCount}
             audioBlocked={radio.audioBlocked}
+            audioDuration={radio.audioDuration}
             sessionInfo={sessionInfo}
             djName={djName}
-            moreLikeThis={false}
             onStop={handleStop}
             onRewind={radio.rewind}
             onBack={handleBack}
@@ -104,12 +104,11 @@ export default function App() {
               progress={radio.progress}
               listenerCount={radio.listenerCount}
               audioBlocked={radio.audioBlocked}
+              audioDuration={radio.audioDuration}
               viewers={radio.viewers}
               sessionInfo={sessionInfo}
               djName={djName}
-              moreLikeThis={radio.moreLikeThis}
-              onToggleMoreLikeThis={() => radio.setMoreLikeThis(!radio.moreLikeThis)}
-              canPinSeed={!!radio.lastSeed}
+              onSaveTrack={radio.currentTrack ? () => radio.saveTrack(radio.currentTrack!.id) : undefined}
               onStop={handleStop}
               onRewind={radio.rewind}
               onBack={handleBack}
