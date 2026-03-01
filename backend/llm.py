@@ -132,7 +132,7 @@ LYRICS RULES:
 
 METADATA RULES:
 - BPM must match the genre and mood naturally
-- Duration must be exactly {target_duration} seconds
+- Duration should be around {target_duration} seconds — it is fine if the actual audio runs slightly shorter or longer to allow a natural ending
 
 OUTPUT RULES:
 - Do NOT use emojis or special Unicode characters in any field. Use only plain ASCII text.
