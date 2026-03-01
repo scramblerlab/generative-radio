@@ -43,6 +43,8 @@ button {
   border: none;
   background: none;
   outline: none;
+  -webkit-appearance: none;
+  appearance: none;
 }
 button:disabled { cursor: not-allowed; opacity: 0.4; }
 
