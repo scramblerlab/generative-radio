@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Track, RadioStatus, ActivityEntry, ProgressStage, ViewerInfo, SessionInfo } from '../types';
 import { StatusBar } from './StatusBar';
 
@@ -64,12 +64,11 @@ interface RadioPlayerProps {
   progress: number; // 0–1
   listenerCount: number;
   audioBlocked: boolean;
+  audioDuration?: number | null;
   viewers?: ViewerInfo[];
   sessionInfo?: SessionInfo | null;
   djName?: string;
-  moreLikeThis?: boolean;
-  onToggleMoreLikeThis?: () => void;
-  canPinSeed?: boolean;
+  onSaveTrack?: () => Promise<void>;
   onStop: () => void;
   onRewind: () => void;
   onBack: () => void;
@@ -97,17 +96,22 @@ export function RadioPlayer({
   progress,
   listenerCount,
   audioBlocked,
+  audioDuration,
   viewers = [],
   sessionInfo,
   djName = '',
-  moreLikeThis = false,
-  onToggleMoreLikeThis,
-  canPinSeed = false,
+  onSaveTrack,
   onStop,
   onRewind,
   onBack,
   onUnblockAudio,
 }: RadioPlayerProps) {
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  // Reset save state when the track changes
+  useEffect(() => {
+    setSaveState('idle');
+  }, [track?.id]);
   const isPlaying = status === 'playing';
   const isLoading = status === 'generating' || status === 'buffering' || status === 'connecting';
 
@@ -155,7 +159,7 @@ export function RadioPlayer({
               )}
               <p className="player__tags">{track.tags}</p>
               <p className="player__meta">
-                {track.bpm} BPM · {track.keyScale} · {track.duration}s
+                {track.bpm} BPM · {track.keyScale} · {audioDuration ?? track.duration}s
               </p>
             </div>
           ) : (
@@ -196,16 +200,28 @@ export function RadioPlayer({
           </div>
         )}
 
-        {/* Controller-only: "More Like This" seed toggle */}
-        {!readonly && onToggleMoreLikeThis && (
+        {/* Controller-only: save current track to disk */}
+        {!readonly && onSaveTrack && track && (
           <button
-            className={`player__more-like-this ${moreLikeThis ? 'player__more-like-this--active' : ''}`}
-            onClick={onToggleMoreLikeThis}
-            disabled={!canPinSeed && !moreLikeThis}
-            title={moreLikeThis ? 'Seed pinned — next tracks will have similar character. Click to unpin.' : 'Pin the current track\'s seed to generate similar-sounding tracks'}
+            className={`player__save-track player__save-track--${saveState}`}
+            disabled={saveState === 'saving'}
+            title="Save this track's MP3 and metadata to saved_tracks/"
+            onClick={async () => {
+              setSaveState('saving');
+              try {
+                await onSaveTrack();
+                setSaveState('saved');
+                setTimeout(() => setSaveState('idle'), 2000);
+              } catch {
+                setSaveState('error');
+                setTimeout(() => setSaveState('idle'), 2000);
+              }
+            }}
           >
-            <span className="player__more-like-this-icon">{moreLikeThis ? '🔒' : '🎲'}</span>
-            More Like This{moreLikeThis ? ' (ON)' : ''}
+            <span className="player__save-track-icon">
+              {saveState === 'saved' ? '✓' : saveState === 'error' ? '⚠' : '👍'}
+            </span>
+            {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved!' : saveState === 'error' ? 'Error' : 'Save Track'}
           </button>
         )}
 

@@ -27,9 +27,8 @@ export interface UseRadioReturn {
   listenerCount: number;
   audioBlocked: boolean;
   viewers: ViewerInfo[];
-  lastSeed: string | null;
-  moreLikeThis: boolean;
-  setMoreLikeThis: (on: boolean) => void;
+  audioDuration: number | null; // Actual decoded audio duration (seconds); null until loaded
+  saveTrack: (trackId: string) => Promise<void>;
   start: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => Promise<void>;
   stop: () => Promise<void>;
   updateSettings: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => void;
@@ -55,8 +54,7 @@ export function useRadio(): UseRadioReturn {
   const [listenerCount, setListenerCount] = useState(0);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [viewers, setViewers] = useState<ViewerInfo[]>([]);
-  const [lastSeed, setLastSeed] = useState<string | null>(null);
-  const [moreLikeThis, setMoreLikeThisState] = useState(false);
+  const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const activityIdRef = useRef(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -102,8 +100,17 @@ export function useRadio(): UseRadioReturn {
         setProgress(audio.currentTime / audio.duration);
       }
     };
+    const onLoadedMetadata = () => {
+      if (audio.duration > 0) {
+        setAudioDuration(Math.round(audio.duration));
+      }
+    };
     audio.addEventListener('timeupdate', onTimeUpdate);
-    return () => audio.removeEventListener('timeupdate', onTimeUpdate);
+    audio.addEventListener('loadedmetadata', onLoadedMetadata);
+    return () => {
+      audio.removeEventListener('timeupdate', onTimeUpdate);
+      audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+    };
   // audioRef is a stable object; the effect only needs to run once at mount.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -126,6 +133,7 @@ export function useRadio(): UseRadioReturn {
     console.log('[Audio] Playing track:', track.songTitle);
     setCurrentTrack(track);
     setProgress(0);
+    setAudioDuration(null);
     setErrorMessage(null);
 
     // Revoke the previously active blob URL — the old track is no longer needed.
@@ -252,8 +260,7 @@ export function useRadio(): UseRadioReturn {
         console.log('[Radio] Role assigned:', assignedRole);
         setRole(assignedRole);
       } else if (msg.event === 'track_ready') {
-        const { track, isNext, seed } = msg.data as unknown as TrackReadyData;
-        if (seed) setLastSeed(seed);
+        const { track, isNext } = msg.data as unknown as TrackReadyData;
 
         if (!isNext) {
           // Server says: play this track now (first track or buffering-recovery path).
@@ -375,8 +382,6 @@ export function useRadio(): UseRadioReturn {
 
     // Send start command over WebSocket. The server validates that this client
     // is the controller and responds via broadcast events (status, track_ready, error).
-    setLastSeed(null);
-    setMoreLikeThisState(false);
     sendWS({ event: 'start', data: { genres, keywords, language, feeling, advancedOptions } });
   }, [clearPreloadBlob, clearActiveBlob, sendWS]);
 
@@ -386,8 +391,6 @@ export function useRadio(): UseRadioReturn {
   ) => {
     console.log('[Radio] Updating settings mid-session — genres:', genres, 'language:', language);
     // Do NOT touch audioRef or activeBlobUrl — current track keeps playing
-    setMoreLikeThisState(false);
-    setLastSeed(null);
     setNextReady(false);
     nextTrackRef.current = null;
     clearPreloadBlob(); // Revoke pre-fetched blob for old next track (will be discarded)
@@ -403,8 +406,6 @@ export function useRadio(): UseRadioReturn {
     setNextReady(false);
     setStatus('stopped');
     setProgress(0);
-    setLastSeed(null);
-    setMoreLikeThisState(false);
 
     sendWS({ event: 'stop' });
   }, [clearPreloadBlob, clearActiveBlob, sendWS]);
@@ -434,16 +435,13 @@ export function useRadio(): UseRadioReturn {
     });
   }, [currentTrack]);
 
-  const setMoreLikeThis = useCallback((on: boolean) => {
-    setMoreLikeThisState(on);
-    if (on && lastSeed) {
-      console.log('[Radio] Pinning seed:', lastSeed);
-      sendWS({ event: 'pin_seed', data: { seed: lastSeed } });
-    } else {
-      console.log('[Radio] Unpinning seed');
-      sendWS({ event: 'unpin_seed' });
+  const saveTrack = useCallback(async (trackId: string): Promise<void> => {
+    const res = await fetch(`/api/tracks/${trackId}/save`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error((err as { detail?: string }).detail ?? 'Save failed');
     }
-  }, [lastSeed, sendWS]);
+  }, []);
 
   return {
     role,
@@ -456,9 +454,8 @@ export function useRadio(): UseRadioReturn {
     listenerCount,
     audioBlocked,
     viewers,
-    lastSeed,
-    moreLikeThis,
-    setMoreLikeThis,
+    audioDuration,
+    saveTrack,
     start,
     stop,
     updateSettings,

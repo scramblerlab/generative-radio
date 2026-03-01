@@ -24,6 +24,11 @@ DURATION_LARGE_S = 180            # safe on ≥48 GB machines (~33 GB MLX VAE bu
 #   Track 2+ (third+): 180 s — full length
 _PROGRESSIVE_DURATIONS = [DURATION_DEFAULT_S, 120, DURATION_LARGE_S]
 
+# Extra seconds added to ACE-Step's audio_duration beyond the LLM composition target.
+# Gives the music room to resolve its final phrase naturally instead of hard-stopping.
+# The LLM still composes to the base target; only the ACE-Step generation window grows.
+DURATION_OVERRUN_S = 30
+
 
 def get_unified_memory_gb() -> int:
     """Read total unified memory via sysctl — Apple Silicon / macOS only."""

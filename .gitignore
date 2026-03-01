@@ -17,3 +17,6 @@ frontend/dist/
 # Editor
 .cursor/
 *.swp
+
+# Saved tracks
+saved_tracks/
