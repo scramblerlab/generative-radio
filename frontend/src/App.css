@@ -798,42 +798,77 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 .player__save-track {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
   margin-top: 18px;
   padding: 9px 18px;
-  border: 1.5px solid var(--accent);
+  border: none;
   border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--accent);
+  background: #e2e8f0;
+  color: #1e293b;
   font-family: inherit;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s;
   align-self: center;
 }
 .player__save-track:not(:disabled):hover {
-  background: var(--accent);
-  color: #fff;
-}
-.player__save-track--saved {
-  border-color: var(--green);
-  color: var(--green);
-}
-.player__save-track--saved:not(:disabled):hover {
-  background: var(--green);
-  color: #fff;
+  background: #cbd5e1;
 }
 .player__save-track--error {
-  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
   color: #ef4444;
 }
 .player__save-track:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.player__save-track-icon {
-  font-size: 14px;
+
+/* Save confirmation dialog */
+.save-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.save-dialog {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  box-shadow: var(--shadow);
+  min-width: 220px;
+}
+
+.save-dialog__msg {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--green);
+  text-align: center;
+}
+
+.save-dialog__ok {
+  padding: 8px 28px;
+  background: #e2e8f0;
+  color: #1e293b;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.save-dialog__ok:hover {
+  background: #cbd5e1;
 }
 
 /* Invite text */
