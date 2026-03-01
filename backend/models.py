@@ -24,7 +24,7 @@ class SongPrompt(BaseModel):
     mood: str = Field(description="Emotion, atmosphere, and timbre texture (e.g. 'warm, intimate, nostalgic, smoky, lush')")
     vocal_style: str = Field(description="Vocal gender, timbre, and technique; empty string for instrumental (e.g. 'female vocal, breathy, soft')")
     production: str = Field(description="Production style, rhythm feel, and structure hints (e.g. 'lo-fi, bedroom pop, laid-back groove')")
-    lyrics: str = Field(description="Song lyrics with structure tags like [Intro], [Verse], [Pre-Chorus], [Chorus], [Bridge], [Outro]")
+    lyrics: str = Field(description="Song lyrics with structure tags like [Intro], [Verse], [Pre-Chorus], [Chorus], [Bridge], [Outro], [Fade Out]")
     bpm: int = Field(description="Tempo in BPM", ge=60, le=200)
     key_scale: str = Field(description="Musical key, e.g. 'C Major', 'Am', 'F# Minor'")
     duration: int = Field(description="Song duration in seconds", ge=30, le=MAX_DURATION_S)
@@ -33,6 +33,14 @@ class SongPrompt(BaseModel):
     def tags(self) -> str:
         """Concatenate all dimension fields into a single comma-separated caption string."""
         return ", ".join(filter(None, [self.style, self.instruments, self.mood, self.vocal_style, self.production]))
+
+    @field_validator("lyrics")
+    @classmethod
+    def ensure_fade_out(cls, v: str) -> str:
+        """Guarantee [Fade Out] is present — belt-and-suspenders if the LLM forgets."""
+        if v and "[Fade Out]" not in v:
+            return v.rstrip() + "\n\n[Fade Out]"
+        return v
 
     @field_validator("duration")
     @classmethod
