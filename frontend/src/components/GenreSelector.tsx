@@ -201,16 +201,7 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
           if (!items || items.length === 0) return null;
           return (
             <div key={cat} className="mood-category">
-              <div className="mood-category__header">
-                <h3 className="mood-category__label">{MOOD_CATEGORY_LABELS[cat] ?? cat}</h3>
-                <button
-                  className="mood-category__random"
-                  onClick={() => randomizeCategory(cat)}
-                  type="button"
-                >
-                  RANDOM
-                </button>
-              </div>
+              <h3 className="mood-category__label">{MOOD_CATEGORY_LABELS[cat] ?? cat}</h3>
               <div className="keyword-row">
                 {items.map((k) => (
                   <button
@@ -222,6 +213,13 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
                     {k.label}
                   </button>
                 ))}
+                <button
+                  className="keyword-chip keyword-chip--random"
+                  onClick={() => randomizeCategory(cat)}
+                  type="button"
+                >
+                  🎲 RANDOM
+                </button>
               </div>
             </div>
           );
