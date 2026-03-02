@@ -2,14 +2,12 @@ import { useState, useEffect, useMemo } from 'react';
 import { Genre, Keyword, Language, AdvancedOptions, Track } from '../types';
 
 const MOOD_CATEGORY_LABELS: Record<string, string> = {
-  energy: 'Energy',
-  emotion: 'Emotion',
+  emotion:    'Emotion',
   atmosphere: 'Atmosphere',
-  texture: 'Texture',
   instrument: 'Instrument',
 };
 
-const MOOD_CATEGORY_ORDER = ['energy', 'emotion', 'atmosphere', 'texture', 'instrument'];
+const MOOD_CATEGORY_ORDER = ['emotion', 'atmosphere', 'instrument'];
 const FEELING_MAX_LENGTH = 200;
 
 const TIME_SIGNATURES = [
@@ -90,7 +88,9 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
   const keywordsByCategory = useMemo(() => {
     const grouped: Record<string, Keyword[]> = {};
     for (const kw of keywords) {
-      const cat = kw.category || 'other';
+      let cat = kw.category || 'other';
+      if (cat === 'energy')  cat = 'emotion';    // merge Energy → Emotion
+      if (cat === 'texture') cat = 'atmosphere'; // merge Texture → Atmosphere
       if (!grouped[cat]) grouped[cat] = [];
       grouped[cat].push(kw);
     }
@@ -114,6 +114,18 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+  };
+
+  const randomizeCategory = (cat: string) => {
+    const items = keywordsByCategory[cat];
+    if (!items || items.length === 0) return;
+    setSelectedKeywords((prev) => {
+      const next = new Set(prev);
+      items.forEach((k) => next.delete(k.id));
+      const pick = items[Math.floor(Math.random() * items.length)];
+      next.add(pick.id);
       return next;
     });
   };
@@ -189,7 +201,16 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
           if (!items || items.length === 0) return null;
           return (
             <div key={cat} className="mood-category">
-              <h3 className="mood-category__label">{MOOD_CATEGORY_LABELS[cat] ?? cat}</h3>
+              <div className="mood-category__header">
+                <h3 className="mood-category__label">{MOOD_CATEGORY_LABELS[cat] ?? cat}</h3>
+                <button
+                  className="mood-category__random"
+                  onClick={() => randomizeCategory(cat)}
+                  type="button"
+                >
+                  RANDOM
+                </button>
+              </div>
               <div className="keyword-row">
                 {items.map((k) => (
                   <button
