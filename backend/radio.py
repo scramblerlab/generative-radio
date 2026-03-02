@@ -11,7 +11,7 @@ from models import RadioState, TrackInfo, WSMessage, SongPrompt
 from llm import OllamaClient
 from acestep_client import ACEStepClient
 from config import mem_snapshot, get_progressive_duration
-from genres import GENRES
+from genres import GENRES, KEYWORDS
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,31 @@ def _normalize_ip(raw: str) -> str:
     return raw
 
 
+# Mapping from frontend merged category name → backend KEYWORDS category values
+_RANDOM_KW_CAT_MAP: dict[str, set[str]] = {
+    'emotion':    {'energy', 'emotion'},
+    'atmosphere': {'atmosphere', 'texture'},
+    'instrument': {'instrument'},
+}
+
+
+def _parse_keywords(keywords: list[str]) -> tuple[list[str], list[str]]:
+    """Split a keywords list into (fixed_keywords, random_categories).
+
+    Keywords matching the pattern ``__random_<cat>__`` are extracted as
+    random-category markers; all others are treated as fixed selections.
+    """
+    fixed: list[str] = []
+    random_cats: list[str] = []
+    for kw in keywords:
+        if kw.startswith('__random_') and kw.endswith('__'):
+            cat = kw[len('__random_'):-len('__')]
+            random_cats.append(cat)
+        else:
+            fixed.append(kw)
+    return fixed, random_cats
+
+
 class RadioOrchestrator:
     def __init__(self, llm: OllamaClient, acestep: ACEStepClient):
         self.llm = llm
@@ -48,7 +73,8 @@ class RadioOrchestrator:
         self.feeling: str = ""                # Free-text mood from user
         self.advanced_options: dict = {}      # timeSignature, inferenceSteps, model, thinking, cot flags
         self._saved_advanced_options: dict = {}  # persists across sessions for cross-browser recall
-        self._random_genre: bool = False     # True when controller selected "Random" mode
+        self._random_genre: bool = False          # True when controller selected "Random" genre mode
+        self._random_keyword_categories: list[str] = []  # Categories with per-track random keyword picks
         self.history: list[str] = []          # Song titles played this session
 
         # Track management
@@ -142,7 +168,7 @@ class RadioOrchestrator:
         else:
             self._random_genre = False
             self.genres = genres
-        self.keywords = keywords
+        self.keywords, self._random_keyword_categories = _parse_keywords(keywords)
         self.language = language
         self.feeling = feeling
         self.advanced_options = advanced_options or {}
@@ -271,7 +297,7 @@ class RadioOrchestrator:
         else:
             self._random_genre = False
             self.genres = genres
-        self.keywords = keywords
+        self.keywords, self._random_keyword_categories = _parse_keywords(keywords)
         self.language = language
         self.feeling = feeling
         self.advanced_options = advanced_options or {}
@@ -642,12 +668,22 @@ class RadioOrchestrator:
                 genres_for_llm[0] if genres_for_llm else "",
             )
 
+        # Resolve random keyword categories: pick one keyword per category each track
+        keywords_for_llm = list(self.keywords)
+        for cat in self._random_keyword_categories:
+            backend_cats = _RANDOM_KW_CAT_MAP.get(cat, {cat})
+            pool = [k['id'] for k in KEYWORDS if k['category'] in backend_cats]
+            if pool:
+                pick = random.choice(pool)
+                keywords_for_llm.append(pick)
+                logger.info(f"[radio] [{short_id}] Random keyword picked for '{cat}': {pick}")
+
         await self._broadcast_progress("llm_thinking", "DJ is writing the next song prompt…")
         logger.info(f"[radio] [{short_id}] Before LLM    — {mem_snapshot()}")
         logger.info(f"[radio] [{short_id}] Calling LLM for song prompt...")
         t_llm = time.monotonic()
         song_prompt: SongPrompt = await self.llm.generate_prompt(
-            genres_for_llm, self.keywords, self.history,
+            genres_for_llm, keywords_for_llm, self.history,
             duration=target_duration, language=self.language,
             feeling=self.feeling,
         )

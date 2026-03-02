@@ -41,6 +41,7 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
   const [selectedGenre, setSelectedGenre] = useState<string>('rock');
   const [isRandomGenre, setIsRandomGenre] = useState(false);
   const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(new Set());
+  const [randomCategories, setRandomCategories] = useState<Set<string>>(new Set());
   const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
   const [feeling, setFeeling] = useState('');
   const [djName, setDjName] = useState('');
@@ -110,6 +111,19 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
   };
 
   const toggleKeyword = (id: string) => {
+    // If this keyword's category is in random mode, deactivate it first
+    const kw = keywords.find((k) => k.id === id);
+    if (kw) {
+      let cat = kw.category;
+      if (cat === 'energy')  cat = 'emotion';
+      if (cat === 'texture') cat = 'atmosphere';
+      setRandomCategories((prev) => {
+        if (!prev.has(cat)) return prev;
+        const next = new Set(prev);
+        next.delete(cat);
+        return next;
+      });
+    }
     setSelectedKeywords((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -119,19 +133,26 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
   };
 
   const randomizeCategory = (cat: string) => {
-    const items = keywordsByCategory[cat];
-    if (!items || items.length === 0) return;
-    setSelectedKeywords((prev) => {
+    // Toggle random mode for this category; clear any manually-selected chips in it
+    setRandomCategories((prev) => {
       const next = new Set(prev);
-      items.forEach((k) => next.delete(k.id));
-      const pick = items[Math.floor(Math.random() * items.length)];
-      next.add(pick.id);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
       return next;
     });
+    const items = keywordsByCategory[cat] ?? [];
+    if (items.length > 0) {
+      setSelectedKeywords((prev) => {
+        const next = new Set(prev);
+        items.forEach((k) => next.delete(k.id));
+        return next;
+      });
+    }
   };
 
   const handleStart = () => {
     const keywordList = [...selectedKeywords];
+    randomCategories.forEach((cat) => keywordList.push(`__random_${cat}__`));
     const opts: AdvancedOptions = {
       inferenceSteps,
       model: ditModel,
@@ -214,9 +235,10 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
                   </button>
                 ))}
                 <button
-                  className="keyword-chip keyword-chip--random"
+                  className={`keyword-chip keyword-chip--random ${randomCategories.has(cat) ? 'keyword-chip--selected' : ''}`}
                   onClick={() => randomizeCategory(cat)}
                   type="button"
+                  aria-pressed={randomCategories.has(cat)}
                 >
                   🎲 RANDOM
                 </button>
