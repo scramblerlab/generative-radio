@@ -169,6 +169,10 @@ class RadioOrchestrator:
             self._random_genre = False
             self.genres = genres
         self.keywords, self._random_keyword_categories = _parse_keywords(keywords)
+        logger.info(
+            f"[radio] Keywords parsed — fixed: {self.keywords or 'none'}, "
+            f"random categories: {self._random_keyword_categories or 'none'}"
+        )
         self.language = language
         self.feeling = feeling
         self.advanced_options = advanced_options or {}
@@ -298,6 +302,10 @@ class RadioOrchestrator:
             self._random_genre = False
             self.genres = genres
         self.keywords, self._random_keyword_categories = _parse_keywords(keywords)
+        logger.info(
+            f"[radio] Keywords parsed — fixed: {self.keywords or 'none'}, "
+            f"random categories: {self._random_keyword_categories or 'none'}"
+        )
         self.language = language
         self.feeling = feeling
         self.advanced_options = advanced_options or {}
@@ -678,6 +686,9 @@ class RadioOrchestrator:
                 keywords_for_llm.append(pick)
                 logger.info(f"[radio] [{short_id}] Random keyword picked for '{cat}': {pick}")
 
+        logger.info(
+            f"[radio] [{short_id}] Keywords for LLM: {keywords_for_llm or 'none'}"
+        )
         await self._broadcast_progress("llm_thinking", "DJ is writing the next song prompt…")
         logger.info(f"[radio] [{short_id}] Before LLM    — {mem_snapshot()}")
         logger.info(f"[radio] [{short_id}] Calling LLM for song prompt...")
