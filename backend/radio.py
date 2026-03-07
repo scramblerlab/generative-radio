@@ -105,6 +105,13 @@ class RadioOrchestrator:
         self._controller_ws: WebSocket | None = None
         self._pending_promotion: bool = False  # Promote next viewer once prebuffer finishes
 
+        # DJ mode
+        _DJ_LOCK_S = 180.0
+        self._DJ_LOCK_S: float = _DJ_LOCK_S
+        self._dj_lock_until: float = time.time() + _DJ_LOCK_S  # locked on server start
+        self._dj_claimant_ws: WebSocket | None = None  # WS that won claim but hasn't submitted yet
+        self._dj_name: str = ""  # Current DJ name; drives title suffix for all subsequent tracks
+
     # ------------------------------------------------------------------ #
     # WebSocket connection management
     # ------------------------------------------------------------------ #
@@ -126,12 +133,17 @@ class RadioOrchestrator:
             asyncio.create_task(self._send_viewer_snapshot(ws))
         asyncio.create_task(self._broadcast_listener_count())
         asyncio.create_task(self._broadcast_viewer_list_to_controller())
+        asyncio.create_task(self._broadcast_dj_state())
 
     def remove_ws(self, ws: WebSocket) -> None:
         if ws in self._ws_connections:
             self._ws_connections.remove(ws)
         self._ws_meta.pop(ws, None)
         logger.info(f"[radio] WS disconnected — total connections: {len(self._ws_connections)}")
+
+        if ws == self._dj_claimant_ws:
+            self._dj_claimant_ws = None
+            asyncio.create_task(self._broadcast_dj_state())
 
         if ws == self._controller_ws:
             self._controller_ws = None
@@ -403,6 +415,7 @@ class RadioOrchestrator:
         waiting for the next broadcast cycle.
         """
         await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "viewer"}))
+        await self._send_to(ws, self._make_dj_state_message())
 
         # Only send state if a session is actually running
         if self.state in (RadioState.IDLE, RadioState.STOPPED):
@@ -799,8 +812,66 @@ class RadioOrchestrator:
             duration=song_prompt.duration,
             audio_url=f"/api/audio/{track_id}",
         )
+        # Apply DJ name suffix to title if a DJ session is active.
+        # History above still uses the raw LLM title so the model's context stays clean.
+        if self._dj_name:
+            track_info = track_info.model_copy(
+                update={"song_title": f"{track_info.song_title} (DJ: {self._dj_name})"}
+            )
+
         self.track_info_cache[track_id] = track_info
         return track_info
+
+    # ------------------------------------------------------------------ #
+    # DJ mode
+    # ------------------------------------------------------------------ #
+
+    def _make_dj_state_message(self) -> WSMessage:
+        """Build the current dj_state WSMessage (for broadcast or unicast)."""
+        now = time.time()
+        return WSMessage(
+            event="dj_state",
+            data={
+                "locked": now < self._dj_lock_until,
+                "unlockAt": self._dj_lock_until,
+                "activeDjName": self._dj_name,
+            },
+        )
+
+    async def _broadcast_dj_state(self) -> None:
+        await self.broadcast(self._make_dj_state_message())
+
+    async def claim_dj_from_ws(self, ws: WebSocket) -> None:
+        """First-click-wins claim. Safe: no await between guard check and mutation."""
+        now = time.time()
+        if now < self._dj_lock_until or self._dj_claimant_ws is not None:
+            await self._send_to(ws, WSMessage(event="dj_claim_ack", data={"granted": False}))
+            return
+        # Atomic claim: assign before any await
+        self._dj_claimant_ws = ws
+        self._dj_lock_until = now + self._DJ_LOCK_S  # re-lock immediately for all others
+        logger.info("[radio] DJ slot claimed")
+        await self._send_to(ws, WSMessage(event="dj_claim_ack", data={"granted": True}))
+        await self._broadcast_dj_state()
+
+    async def submit_dj_from_ws(
+        self,
+        ws: WebSocket,
+        genres: list[str],
+        keywords: list[str],
+        language: str,
+        feeling: str,
+        dj_name: str,
+    ) -> None:
+        """Apply DJ's selections via the existing reschedule pathway."""
+        if ws != self._dj_claimant_ws:
+            logger.warning("[radio] dj_submit rejected — sender is not the current claimant")
+            return
+        self._dj_name = dj_name.strip()
+        self._dj_claimant_ws = None
+        logger.info(f"[radio] DJ submitted: name={self._dj_name!r}, genres={genres}, language={language}")
+        await self.reschedule(genres, keywords, language, feeling, advanced_options=None)
+        await self._broadcast_dj_state()
 
     # ------------------------------------------------------------------ #
     # WebSocket broadcast helpers

@@ -58,7 +58,7 @@ export interface Language {
 
 // WebSocket message shape from the server
 export interface WSMessage {
-  event: 'track_ready' | 'status' | 'error' | 'progress' | 'listener_count' | 'role_assigned' | 'viewer_list';
+  event: 'track_ready' | 'status' | 'error' | 'progress' | 'listener_count' | 'role_assigned' | 'viewer_list' | 'dj_state' | 'dj_claim_ack';
   data: Record<string, unknown>;
 }
 
@@ -113,4 +113,14 @@ export interface ViewerInfo {
 
 export interface ViewerListData {
   viewers: ViewerInfo[];
+}
+
+export interface DjStateData {
+  locked: boolean;
+  unlockAt: number;       // Unix timestamp (seconds)
+  activeDjName: string;
+}
+
+export interface DjClaimAckData {
+  granted: boolean;
 }

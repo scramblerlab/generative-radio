@@ -241,6 +241,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
             elif event == "skip":
                 await radio.skip_from_ws(websocket)
+            elif event == "dj_claim":
+                await radio.claim_dj_from_ws(websocket)
+            elif event == "dj_submit":
+                event_data = data.get("data", {})
+                await radio.submit_dj_from_ws(
+                    websocket,
+                    genres=event_data.get("genres", []),
+                    keywords=event_data.get("keywords", []),
+                    language=event_data.get("language", "en"),
+                    feeling=event_data.get("feeling", ""),
+                    dj_name=event_data.get("djName", ""),
+                )
             else:
                 logger.warning(f"[main] Unknown WS event from client: {event}")
 

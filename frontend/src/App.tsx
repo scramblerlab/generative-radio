@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { GenreSelector } from './components/GenreSelector';
 import { RadioPlayer } from './components/RadioPlayer';
+import { DJPanel } from './components/DJPanel';
 import { useRadio } from './hooks/useRadio';
 import { SessionInfo, AdvancedOptions } from './types';
 import './App.css';
@@ -63,6 +64,11 @@ export default function App() {
       {/* Audio element — always in DOM so audioRef is always valid */}
       <audio ref={radio.audioRef} preload="auto" />
 
+      {/* DJ panel modal — rendered above everything, visible to whichever client claimed the slot */}
+      {radio.djPanelOpen && (
+        <DJPanel onSubmit={radio.submitDj} onClose={radio.closeDjPanel} />
+      )}
+
       <main className="app">
         {radio.role === null ? (
           <div className="selector-loading">
@@ -88,6 +94,10 @@ export default function App() {
             onRewind={radio.rewind}
             onBack={handleBack}
             onUnblockAudio={radio.unblockAudio}
+            djLocked={radio.djLocked}
+            djUnlockAt={radio.djUnlockAt}
+            activeDjName={radio.activeDjName}
+            onClaimDj={radio.claimDj}
           />
         ) : (
           view === 'selector' ? (
@@ -113,6 +123,10 @@ export default function App() {
               onRewind={radio.rewind}
               onBack={handleBack}
               onUnblockAudio={radio.unblockAudio}
+              djLocked={radio.djLocked}
+              djUnlockAt={radio.djUnlockAt}
+              activeDjName={radio.activeDjName}
+              onClaimDj={radio.claimDj}
             />
           )
         )}
