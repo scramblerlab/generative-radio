@@ -1044,3 +1044,122 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ── DJ button in player ─────────────────────────────── */
+.player__dj-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.player__dj-btn {
+  padding: 8px 20px;
+  background: var(--accent);
+  color: #000;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  transition: opacity 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+
+.player__dj-btn:not(:disabled):hover {
+  opacity: 0.85;
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.player__dj-btn:not(:disabled):active { transform: scale(0.97); }
+
+.player__dj-btn--locked {
+  background: transparent;
+  color: var(--text-muted);
+  border: 2px solid var(--border-2);
+  cursor: default;
+  opacity: 1; /* override global button:disabled { opacity: 0.4 } — countdown already signals locked */
+}
+
+.player__dj-unlock-timer {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+}
+
+.player__dj-active {
+  font-size: 11px;
+  color: var(--accent);
+  letter-spacing: 0.3px;
+}
+
+/* ── DJ panel modal ──────────────────────────────────── */
+.dj-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+}
+
+.dj-panel {
+  width: 100%;
+  max-width: 600px;
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: 20px;
+  padding: 32px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.dj-panel__header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dj-panel__title {
+  font-family: var(--font-display);
+  font-size: 32px;
+  letter-spacing: 2px;
+  color: var(--text);
+}
+
+.dj-panel__subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.dj-panel__footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.dj-panel__close {
+  font-size: 13px;
+  color: var(--text-muted);
+  transition: color 0.15s;
+}
+
+.dj-panel__close:hover { color: var(--text); }
+
+.feeling-input--error { border-color: var(--red); }
+
+.dj-panel__name-error {
+  font-size: 12px;
+  color: var(--red);
+  margin-top: -8px;
+}

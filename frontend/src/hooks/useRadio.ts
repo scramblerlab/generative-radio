@@ -14,6 +14,8 @@ import {
   ViewerInfo,
   ViewerListData,
   AdvancedOptions,
+  DjStateData,
+  DjClaimAckData,
 } from '../types';
 
 export interface UseRadioReturn {
@@ -36,6 +38,14 @@ export interface UseRadioReturn {
   unblockAudio: () => void;
   audioRef: RefObject<HTMLAudioElement | null>;
   progress: number; // 0–1
+  // DJ mode
+  djLocked: boolean;
+  djUnlockAt: number;       // Unix timestamp (seconds) when DJ button becomes available
+  activeDjName: string;     // Name of the current DJ (empty if none)
+  djPanelOpen: boolean;     // Whether the DJ panel modal is open for this client
+  claimDj: () => void;
+  submitDj: (genres: string[], keywords: string[], language: string, feeling: string, djName: string) => void;
+  closeDjPanel: () => void;
 }
 
 const WS_URL = '/ws';
@@ -56,6 +66,12 @@ export function useRadio(): UseRadioReturn {
   const [viewers, setViewers] = useState<ViewerInfo[]>([]);
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const activityIdRef = useRef(0);
+
+  // DJ mode state
+  const [djLocked, setDjLocked] = useState(true);
+  const [djUnlockAt, setDjUnlockAt] = useState(0);
+  const [activeDjName, setActiveDjName] = useState('');
+  const [djPanelOpen, setDjPanelOpen] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -305,6 +321,16 @@ export function useRadio(): UseRadioReturn {
         console.error('[Radio] Error from server:', message);
         setErrorMessage(message);
         setStatus('stopped');
+      } else if (msg.event === 'dj_state') {
+        const d = msg.data as unknown as DjStateData;
+        console.log('[DJ] State update — locked:', d.locked, 'activeDj:', d.activeDjName);
+        setDjLocked(d.locked);
+        setDjUnlockAt(d.unlockAt);
+        setActiveDjName(d.activeDjName);
+      } else if (msg.event === 'dj_claim_ack') {
+        const { granted } = msg.data as unknown as DjClaimAckData;
+        console.log('[DJ] Claim ack — granted:', granted);
+        if (granted) setDjPanelOpen(true);
       }
     };
 
@@ -443,6 +469,22 @@ export function useRadio(): UseRadioReturn {
     }
   }, []);
 
+  const claimDj = useCallback(() => {
+    console.log('[DJ] Claiming DJ slot');
+    sendWS({ event: 'dj_claim' });
+  }, [sendWS]);
+
+  const submitDj = useCallback((
+    genres: string[], keywords: string[],
+    language: string, feeling: string, djName: string,
+  ) => {
+    console.log('[DJ] Submitting DJ form — name:', djName);
+    setDjPanelOpen(false);
+    sendWS({ event: 'dj_submit', data: { genres, keywords, language, feeling, djName } });
+  }, [sendWS]);
+
+  const closeDjPanel = useCallback(() => setDjPanelOpen(false), []);
+
   return {
     role,
     status,
@@ -463,5 +505,12 @@ export function useRadio(): UseRadioReturn {
     unblockAudio,
     audioRef,
     progress,
+    djLocked,
+    djUnlockAt,
+    activeDjName,
+    djPanelOpen,
+    claimDj,
+    submitDj,
+    closeDjPanel,
   };
 }

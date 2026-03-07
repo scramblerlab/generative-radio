@@ -73,6 +73,10 @@ interface RadioPlayerProps {
   onRewind: () => void;
   onBack: () => void;
   onUnblockAudio: () => void;
+  // DJ mode
+  djUnlockAt: number;
+  activeDjName?: string;
+  onClaimDj: () => void;
 }
 
 function Equalizer({ active }: { active: boolean }) {
@@ -103,9 +107,30 @@ export function RadioPlayer({
   onSaveTrack,
   onBack,
   onUnblockAudio,
+  djUnlockAt,
+  activeDjName,
+  onClaimDj,
 }: RadioPlayerProps) {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'error'>('idle');
   const [showToast, setShowToast] = useState(false);
+  // Tick every second so we can recompute the countdown and locked state locally.
+  // The server only sends dj_state on discrete events (connect, claim, submit) — it
+  // does NOT push an explicit event when the timer expires. So we derive the locked
+  // state from `djUnlockAt` (the Unix timestamp) rather than trusting `djLocked`.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const nowSec = Date.now() / 1000;
+  // remainingSec = Infinity when unlockAt is unknown (initial 0); otherwise clamped to ≥0
+  const remainingSec = djUnlockAt > 0 ? Math.max(0, Math.ceil(djUnlockAt - nowSec)) : Infinity;
+  const effectiveDjLocked = remainingSec > 0;
+  const djCountdown =
+    effectiveDjLocked && remainingSec !== Infinity
+      ? `${Math.floor(remainingSec / 60)}:${String(remainingSec % 60).padStart(2, '0')}`
+      : '';
 
   // Reset save state when the track changes
   useEffect(() => {
@@ -253,6 +278,23 @@ export function RadioPlayer({
             </div>
           </>
         )}
+
+        {/* DJ mode — visible to all users */}
+        <div className="player__dj-section">
+          <button
+            className={`player__dj-btn${effectiveDjLocked ? ' player__dj-btn--locked' : ''}`}
+            onClick={onClaimDj}
+            disabled={effectiveDjLocked}
+          >
+            Generate Your Tracks
+          </button>
+          {effectiveDjLocked && djCountdown && (
+            <p className="player__dj-unlock-timer">Unlocks in {djCountdown}</p>
+          )}
+          {activeDjName && (
+            <p className="player__dj-active">Now curated by {activeDjName}</p>
+          )}
+        </div>
       </div>
 
       <StatusBar status={status} message={statusMessage} nextReady={nextReady} listenerCount={listenerCount} />
