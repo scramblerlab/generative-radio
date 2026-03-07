@@ -106,7 +106,7 @@ class RadioOrchestrator:
         self._pending_promotion: bool = False  # Promote next viewer once prebuffer finishes
 
         # DJ mode
-        _DJ_LOCK_S = 180.0
+        _DJ_LOCK_S = 360.0
         self._DJ_LOCK_S: float = _DJ_LOCK_S
         self._dj_lock_until: float = time.time() + _DJ_LOCK_S  # locked on server start
         self._dj_claimant_ws: WebSocket | None = None  # WS that won claim but hasn't submitted yet
