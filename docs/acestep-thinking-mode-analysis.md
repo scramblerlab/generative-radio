@@ -8,7 +8,7 @@
 
 ## Question
 
-Should we keep `thinking: true` in the ACE-Step API call, given that our Ollama LLM (`qwen3:8b`) already generates the full song prompt -- style tags, lyrics, BPM, key, duration, and vocal language?
+Should we keep `thinking: true` in the ACE-Step API call, given that our Ollama LLM (`qwen3.5:4b`) already generates the full song prompt -- style tags, lyrics, BPM, key, duration, and vocal language?
 
 ## Finding: The 5Hz LM Does Two Distinct Things
 

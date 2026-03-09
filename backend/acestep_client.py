@@ -195,9 +195,9 @@ class ACEStepClient:
         model: str | None = None,
         seed: str | None = None,
         thinking: bool = True,
-        use_cot_caption: bool = False,
-        use_cot_metas: bool = False,
-        use_cot_language: bool = False,
+        use_cot_caption: bool = True,
+        use_cot_metas: bool = True,
+        use_cot_language: bool = True,
     ) -> tuple[bytes, dict]:
         """Full pipeline: submit → poll → download.
 

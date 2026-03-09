@@ -760,9 +760,9 @@ class RadioOrchestrator:
                 model=opts.get("model"),
                 seed=None,
                 thinking=opts.get("thinking", True),
-                use_cot_caption=opts.get("useCotCaption", False),
-                use_cot_metas=opts.get("useCotMetas", False),
-                use_cot_language=opts.get("useCotLanguage", False),
+                use_cot_caption=opts.get("useCotCaption", True),
+                use_cot_metas=opts.get("useCotMetas", True),
+                use_cot_language=opts.get("useCotLanguage", True),
             )
         finally:
             _progress_task.cancel()

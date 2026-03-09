@@ -25,14 +25,22 @@ class SongPrompt(BaseModel):
     vocal_style: str = Field(description="Vocal gender, timbre, and technique; empty string for instrumental (e.g. 'female vocal, breathy, soft')")
     production: str = Field(description="Production style, rhythm feel, and structure hints (e.g. 'lo-fi, bedroom pop, laid-back groove')")
     lyrics: str = Field(description="Song lyrics with structure tags like [Intro], [Verse], [Pre-Chorus], [Chorus], [Bridge], [Outro], [Fade Out]")
-    bpm: int = Field(description="Tempo in BPM", ge=60, le=200)
-    key_scale: str = Field(description="Musical key, e.g. 'C Major', 'Am', 'F# Minor'")
-    duration: int = Field(description="Song duration in seconds", ge=30, le=MAX_DURATION_S)
+    bpm: int = Field(default=90, description="Tempo in BPM", ge=30, le=300)
+    key_scale: str = Field(default="C Major", description="Musical key, e.g. 'C Major', 'Am', 'F# Minor'")
+    duration: int = Field(default=60, description="Song duration in seconds", ge=30)
 
     @property
     def tags(self) -> str:
         """Concatenate all dimension fields into a single comma-separated caption string."""
         return ", ".join(filter(None, [self.style, self.instruments, self.mood, self.vocal_style, self.production]))
+
+    @field_validator("bpm", "duration", mode="before")
+    @classmethod
+    def coerce_numeric_to_int(cls, v):
+        """Round fractional floats to int — qwen3.5 sometimes outputs e.g. 58.5."""
+        if isinstance(v, float):
+            return round(v)
+        return v
 
     @field_validator("lyrics")
     @classmethod

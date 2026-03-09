@@ -89,7 +89,7 @@ class SongPrompt(BaseModel):
     duration: int
 ```
 
-Why 5 fields instead of 9: to keep token count manageable for `qwen3:8b`. Related dimensions are grouped where they naturally overlap:
+Why 5 fields instead of 9: to keep token count manageable for `qwen3.5:4b`. Related dimensions are grouped where they naturally overlap:
 
 | New Field | ACE-Step Dimensions Covered |
 |---|---|
