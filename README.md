@@ -44,7 +44,7 @@ When `cloudflared` is installed, a public URL is printed in the startup banner â
 3. Optionally describe how you're feeling in free text
 4. Optionally tune advanced ACE-Step parameters (time signature, inference steps, model variant)
 5. Click **Start Radio**
-6. A local LLM (Ollama + Qwen3) generates a dimension-based song prompt (style, instruments, mood, vocal style, production)
+6. A local LLM (Ollama + Qwen3.5) generates a dimension-based song prompt (style, instruments, mood, vocal style, production)
 7. ACE-Step 1.5 generates a full MP3 with semantic audio codes for melodic structure
 8. The song plays in your browser with a live activity log showing generation progress
 9. The next song is pre-generated while the current one plays â€” the frontend pre-fetches audio bytes into memory for seamless, zero-latency transitions
@@ -99,7 +99,7 @@ See `BUILD_SPEC.md` for the full technical specification.
 
 ## LLM and audio duration
 
-The app always uses **`qwen3:8b`** (5.2 GB) for song prompt generation, generating 5 dimension fields (style, instruments, mood, vocal style, production) that are concatenated into a rich ACE-Step caption.
+The app always uses **`qwen3.5:4b`** (~2.5 GB) for song prompt generation, generating 5 dimension fields (style, instruments, mood, vocal style, production) that are concatenated into a rich ACE-Step caption.
 
 Audio duration is selected automatically at startup based on unified memory:
 

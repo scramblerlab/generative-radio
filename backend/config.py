@@ -6,9 +6,8 @@ import psutil
 
 logger = logging.getLogger(__name__)
 
-# LLM model — qwen3:8b is sufficient for prompt generation on all machines.
-# Extra memory freed by dropping qwen3:14b benefits ACE-Step's MLX VAE buffer.
-OLLAMA_MODEL_NAME = "qwen3:8b"
+# LLM model — qwen3.5:4b used for all song prompt generation.
+OLLAMA_MODEL_NAME = "qwen3.5:4b"
 
 # Audio duration tiers (unified memory in GB → max song duration in seconds).
 # See docs/acestep-memory-vs-duration.md for the research behind these numbers.
@@ -44,11 +43,11 @@ _MEMORY_GB: int = get_unified_memory_gb()
 
 
 def select_ollama_model() -> str:
-    """Return the Qwen3 model tag for this machine.
+    """Return the Qwen3.5 model tag for this machine.
 
     Priority:
       1. OLLAMA_MODEL environment variable (manual override)
-      2. qwen3:8b on all machines — sufficient for prompt generation
+      2. qwen3.5:4b on all machines — sufficient for prompt generation
     """
     env_override = os.environ.get("OLLAMA_MODEL")
     if env_override:

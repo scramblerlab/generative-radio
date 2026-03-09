@@ -47,7 +47,7 @@ fi
 # Start it temporarily if it isn't already, and clean up afterwards.
 echo ""
 echo "  Pulling LLM model (this may take several minutes):"
-echo "    qwen3:8b  — used for all song prompt generation"
+echo "    qwen3.5:4b  — used for all song prompt generation"
 echo ""
 echo "  Note: 'MLX dynamic library not available' warnings from Ollama are"
 echo "  harmless — it falls back to Metal automatically."
@@ -76,7 +76,27 @@ else
   echo "  Ollama server already running — pulling directly."
 fi
 
-ollama pull qwen3:8b
+PULL_TMPFILE=$(mktemp)
+ollama pull qwen3.5:4b 2>&1 | tee "$PULL_TMPFILE"
+PULL_EXIT=${PIPESTATUS[0]}
+PULL_OUTPUT=$(cat "$PULL_TMPFILE")
+rm -f "$PULL_TMPFILE"
+if echo "$PULL_OUTPUT" | grep -qi "requires a newer version of ollama"; then
+  echo ""
+  echo "  ERROR: Your Ollama version is too old to run qwen3.5:4b."
+  echo "  Please update Ollama and re-run this script:"
+  echo ""
+  echo "    brew upgrade ollama"
+  echo ""
+  echo "  Or download the latest version from https://ollama.com/download"
+  exit 1
+fi
+if [ $PULL_EXIT -ne 0 ]; then
+  echo ""
+  echo "  ERROR: ollama pull failed (exit code $PULL_EXIT)."
+  echo "  Check the output above for details."
+  exit 1
+fi
 
 # Stop the temporary Ollama instance if we started it
 if [[ -n "$SETUP_OLLAMA_PID" ]]; then

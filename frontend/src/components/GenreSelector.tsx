@@ -52,9 +52,9 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
   const [inferenceSteps, setInferenceSteps] = useState(DEFAULT_INFERENCE_STEPS);
   const [ditModel, setDitModel] = useState('turbo');
   const [thinking, setThinking] = useState(true);
-  const [useCotCaption, setUseCotCaption] = useState(false);
-  const [useCotMetas, setUseCotMetas] = useState(false);
-  const [useCotLanguage, setUseCotLanguage] = useState(false);
+  const [useCotCaption, setUseCotCaption] = useState(true);
+  const [useCotMetas, setUseCotMetas] = useState(true);
+  const [useCotLanguage, setUseCotLanguage] = useState(true);
 
   useEffect(() => {
     console.log('[GenreSelector] Fetching genres, keywords, and saved options');
