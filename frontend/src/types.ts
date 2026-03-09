@@ -48,7 +48,8 @@ export interface AdvancedOptions {
   thinking: boolean;         // default true — semantic audio code generation
   useCotCaption: boolean;    // default true
   useCotMetas: boolean;      // default true
-  useCotLanguage: boolean;   // default true
+  useCotLanguage: boolean;   // default false
+  djLockSeconds: number;     // DJ cooldown duration in seconds, default 1800
 }
 
 export interface Language {

@@ -19,12 +19,12 @@ class SongPrompt(BaseModel):
     caption dimensions.  See docs/llm-prompt-improvement-plan.md for rationale.
     """
     song_title: str = Field(description="Creative title for the song")
-    style: str = Field(description="Genre, sub-genre, and optional era reference (e.g. 'smooth jazz, bebop influences, late-night club')")
-    instruments: str = Field(description="Key instruments featured in the track (e.g. 'mellow saxophone, soft piano, upright bass')")
-    mood: str = Field(description="Emotion, atmosphere, and timbre texture (e.g. 'warm, intimate, nostalgic, smoky, lush')")
-    vocal_style: str = Field(description="Vocal gender, timbre, and technique; empty string for instrumental (e.g. 'female vocal, breathy, soft')")
-    production: str = Field(description="Production style, rhythm feel, and structure hints (e.g. 'lo-fi, bedroom pop, laid-back groove')")
-    lyrics: str = Field(description="Song lyrics with structure tags like [Intro], [Verse], [Pre-Chorus], [Chorus], [Bridge], [Outro], [Fade Out]")
+    style: str = Field(default="", description="Genre, sub-genre, and optional era reference (e.g. 'smooth jazz, bebop influences, late-night club')")
+    instruments: str = Field(default="", description="Key instruments featured in the track (e.g. 'mellow saxophone, soft piano, upright bass')")
+    mood: str = Field(default="", description="Emotion, atmosphere, and timbre texture (e.g. 'warm, intimate, nostalgic, smoky, lush')")
+    vocal_style: str = Field(default="", description="Vocal gender, timbre, and technique; empty string for instrumental (e.g. 'female vocal, breathy, soft')")
+    production: str = Field(default="", description="Production style, rhythm feel, and structure hints (e.g. 'lo-fi, bedroom pop, laid-back groove')")
+    lyrics: str = Field(default="", description="Song lyrics with structure tags like [Intro], [Verse], [Pre-Chorus], [Chorus], [Bridge], [Outro], [Fade Out]")
     bpm: int = Field(default=90, description="Tempo in BPM", ge=30, le=300)
     key_scale: str = Field(default="C Major", description="Musical key, e.g. 'C Major', 'Am', 'F# Minor'")
     duration: int = Field(default=60, description="Song duration in seconds", ge=30)

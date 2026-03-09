@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import re
@@ -26,236 +25,97 @@ _LANGUAGE_NAMES: dict[str, str] = {
     "ko": "Korean",
 }
 
+_FIELD_RE = re.compile(r"^([A-Z][A-Z_0-9]*)\s*:\s*(.*)", re.IGNORECASE | re.MULTILINE)
 
-def _find_first_json_object(s: str) -> tuple[int, int]:
-    """Return (start, end+1) indices of the first complete JSON object in s.
-
-    Uses brace counting so that `}` characters inside string values are ignored
-    and nested objects are handled correctly.  Returns (-1, -1) if none found.
-    """
-    brace_start = s.find("{")
-    if brace_start == -1:
-        return -1, -1
-    depth = 0
-    in_string = False
-    escaped = False
-    for i in range(brace_start, len(s)):
-        ch = s[i]
-        if escaped:
-            escaped = False
-            continue
-        if ch == "\\" and in_string:
-            escaped = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if not in_string:
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return brace_start, i + 1
-    return -1, -1  # unbalanced braces
-
-
-def _extract_song_prompt_json(raw: str) -> str:
-    """Recover a complete SongPrompt JSON from a raw LLM response.
-
-    qwen3.5:4b exhibits several misbehaviours:
-
-    1. Outputs caption-dimension fields as valid JSON then appends lyrics as
-       plain text after the closing brace.
-    2. Splits output into two JSON objects — one with most fields (including
-       lyrics) and a second with bpm / key_scale / duration.
-
-    Strategy:
-    - Use brace counting (not rfind) to locate the first complete object.
-    - If the first object parses OK but is missing fields, look for a second
-      JSON object in the trailing text and merge them.
-    - If the first object has no lyrics but trailing text is present, rescue
-      the trailing text as lyrics.
-    """
-    stripped = raw.strip()
-    start, end = _find_first_json_object(stripped)
-    if start == -1:
-        return raw  # no JSON at all — let validation surface the error
-
-    json_part = stripped[start:end]
-    trailing = stripped[end:].strip()
-
-    if not trailing:
-        return json_part  # clean output, nothing to recover
-
-    # Parse the first object to understand what's present
-    try:
-        parsed = json.loads(json_part)
-    except json.JSONDecodeError:
-        return raw  # malformed JSON — let validation surface the error
-
-    # Check for a second JSON object in the trailing text (split-output pattern)
-    t_start, t_end = _find_first_json_object(trailing)
-    if t_start != -1:
-        second_raw = trailing[t_start:t_end]
-        # Also try with _fix_missing_commas applied (inline, to avoid circular dep)
-        candidates = [second_raw, re.sub(r'(["\d])([ \t]*\n[ \t]*)(")', r'\1,\2\3', second_raw)]
-        for candidate in candidates:
-            try:
-                second = json.loads(candidate)
-                if isinstance(second, dict):
-                    # Merge: first-object fields take priority; second fills gaps
-                    merged = {**second, **parsed}
-                    logger.warning(
-                        "[llm] Model split output into 2 JSON objects — merged "
-                        f"fields from second object: {sorted(second)}"
-                    )
-                    return json.dumps(merged)
-            except json.JSONDecodeError:
-                continue
-
-    # No second JSON object — rescue lyrics from trailing plain text if missing
-    if not parsed.get("lyrics") and trailing:
-        logger.warning(
-            "[llm] Model output lyrics outside JSON block — recovering into 'lyrics' field "
-            f"({len(trailing)} chars of trailing text)"
-        )
-        parsed["lyrics"] = trailing
-        return json.dumps(parsed)
-
-    return json_part
-
-
-# Pre-compile for stripping markdown code fences (```json ... ```)
-_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
-
-
-def _strip_code_fence(raw: str) -> str:
-    """Remove markdown code fences that some models wrap JSON in."""
-    m = _CODE_FENCE_RE.search(raw)
-    return m.group(1) if m else raw
-
-
-_CTRL_ESCAPE: dict[int, str] = {
-    0x08: "\\b", 0x09: "\\t", 0x0A: "\\n", 0x0C: "\\f", 0x0D: "\\r",
+_KEY_MAP = {
+    "TITLE":       "song_title",
+    "STYLE":       "style",
+    "INSTRUMENTS": "instruments",
+    "MOOD":        "mood",
+    "VOCAL_STYLE": "vocal_style",
+    "PRODUCTION":  "production",
+    "BPM":         "bpm",
+    "KEY":         "key_scale",
+    "DURATION":    "duration",
 }
 
 
-def _fix_unescaped_quotes(s: str) -> str:
-    """Escape unescaped double-quote characters inside JSON string values.
+def _parse_labeled_text(raw: str) -> SongPrompt:
+    """Parse labeled plain-text LLM output into a SongPrompt.
 
-    qwen3.5 sometimes includes unescaped " in lyrics (e.g. dialogue or song
-    titles with quotation marks), causing the JSON parser to exit the string
-    prematurely and fail with "expected , or }".
+    Expected format:
+        TITLE: ...
+        STYLE: ...
+        ...
+        LYRICS:
+        [Verse 1]
+        ...
+        [Fade Out]
 
-    Heuristic: when inside a string and we encounter an unescaped ", look
-    ahead to the next non-whitespace character.  If it is a valid JSON
-    continuation character (, : } ]) then it is a real closing quote;
-    otherwise it is an embedded quote and must be escaped.
+    LYRICS: acts as a hard separator — everything after it is lyrics verbatim,
+    with no quoting or escaping required.  See docs/plain-text-llm-output-architecture.md.
     """
-    result: list[str] = []
-    i = 0
-    n = len(s)
-    in_string = False
-    escaped = False
+    # Strip markdown code fences
+    raw = re.sub(r"^```[^\n]*\n?", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"^```\s*$", "", raw, flags=re.MULTILINE)
 
-    while i < n:
-        ch = s[i]
-        if escaped:
-            result.append(ch)
-            escaped = False
-            i += 1
+    # Skip thinking preamble — scan to first TITLE: line
+    lines = raw.splitlines()
+    start_idx = 0
+    for i, line in enumerate(lines):
+        if re.match(r"^TITLE\s*:", line, re.IGNORECASE):
+            start_idx = i
+            break
+    relevant = "\n".join(lines[start_idx:])
+
+    # Split header from lyrics on LYRICS: separator
+    lyrics_match = re.search(r"^LYRICS\s*:\s*\n?", relevant, re.IGNORECASE | re.MULTILINE)
+    if lyrics_match:
+        header_block = relevant[:lyrics_match.start()]
+        lyrics_text = relevant[lyrics_match.end():].strip()
+    else:
+        logger.warning("[llm] _parse_labeled_text: LYRICS: label missing — using empty lyrics")
+        header_block = relevant
+        lyrics_text = ""
+
+    # Parse header lines into {LABEL: value} dict
+    fields: dict[str, str] = {
+        m.group(1).upper(): m.group(2).strip()
+        for m in _FIELD_RE.finditer(header_block)
+    }
+
+    # Fix: LLM sometimes collapses two labels onto one line when the first value is empty.
+    # e.g. "VOCAL_STYLE: PRODUCTION: lo-fi, bedroom pop"
+    # Detect this by checking if a field's value starts with another known label.
+    for label in list(fields.keys()):
+        val = fields[label]
+        inline = re.match(r'^([A-Z][A-Z_0-9]*)\s*:\s*(.*)', val, re.IGNORECASE)
+        if inline and inline.group(1).upper() in _KEY_MAP:
+            fields[label] = ""
+            fields[inline.group(1).upper()] = inline.group(2).strip()
+            logger.warning(
+                f"[llm] _parse_labeled_text: fixed inline label — "
+                f"{label} value contained {inline.group(1).upper()}: on same line"
+            )
+
+    missing = [lbl for lbl in _KEY_MAP if lbl not in fields]
+    if missing:
+        logger.warning(f"[llm] _parse_labeled_text: missing labels in header: {missing}")
+
+    kwargs: dict = {"lyrics": lyrics_text}
+    for label, field_name in _KEY_MAP.items():
+        if label not in fields:
             continue
-        if ch == "\\" and in_string:
-            result.append(ch)
-            escaped = True
-            i += 1
-            continue
-        if ch == '"':
-            if not in_string:
-                result.append(ch)
-                in_string = True
-            else:
-                # Two-stage lookahead to decide: real closing quote vs embedded.
-                #
-                # Stage 1: skip spaces/tabs on the same line (not newlines).
-                j = i + 1
-                while j < n and s[j] in " \t":
-                    j += 1
-                next_ch = s[j] if j < n else ""
-
-                if next_ch in ",:}]":
-                    # Unambiguously a closing quote (e.g. "value", or "value"}).
-                    result.append(ch)
-                    in_string = False
-                elif next_ch == "\n":
-                    # Stage 2: the closing " is at the end of a line.
-                    # Skip the newline + any indent to see what starts the next line.
-                    # If it is " (next JSON key) or , } ] → real closing quote.
-                    # If it is regular text → embedded quote at line end.
-                    k = j + 1
-                    while k < n and s[k] in " \t":
-                        k += 1
-                    after_nl = s[k] if k < n else ""
-                    if after_nl in '",:}]':
-                        result.append(ch)
-                        in_string = False
-                    else:
-                        result.append('\\"')
-                else:
-                    # Followed immediately by non-whitespace text → embedded quote.
-                    result.append('\\"')
-            i += 1
-            continue
-        result.append(ch)
-        i += 1
-
-    return "".join(result)
-
-
-def _fix_control_chars(s: str) -> str:
-    """Replace literal control characters inside JSON string values.
-
-    LLMs sometimes embed raw newlines / other control chars (U+0000–U+001F)
-    directly in string fields instead of using JSON escape sequences, producing
-    invalid JSON that json / Pydantic reject.  This walks the string with a
-    minimal state machine and escapes only characters that are inside a JSON
-    string value.
-    """
-    result: list[str] = []
-    in_string = False
-    escaped = False
-    for ch in s:
-        if escaped:
-            result.append(ch)
-            escaped = False
-        elif ch == "\\" and in_string:
-            result.append(ch)
-            escaped = True
-        elif ch == '"':
-            result.append(ch)
-            in_string = not in_string
-        elif in_string and ord(ch) < 0x20:
-            result.append(_CTRL_ESCAPE.get(ord(ch), f"\\u{ord(ch):04x}"))
+        val = fields[label]
+        if field_name in ("bpm", "duration"):
+            try:
+                kwargs[field_name] = int(float(val))
+            except (ValueError, TypeError):
+                logger.warning(f"[llm] Could not parse numeric field {label}={val!r} — using default")
         else:
-            result.append(ch)
-    return "".join(result)
+            kwargs[field_name] = val
 
-
-def _fix_missing_commas(s: str) -> str:
-    """Insert missing commas between JSON object fields.
-
-    qwen3.5:4b sometimes omits the comma after a long string value (e.g. the
-    lyrics field), producing "expected `,` or `}`" parse errors.  This runs
-    after _fix_control_chars, so literal newlines inside string values have
-    already been escaped to \\n — only structural newlines remain, making it
-    safe to match across lines.
-
-    Pattern: a field value ending in `"` or a digit, followed by whitespace
-    containing at least one real newline, then an indented `"` opening a new
-    key — with no comma in between.
-    """
-    return re.sub(r'(["\d])([ \t]*\n[ \t]*)(")', lambda m: m.group(1) + "," + m.group(2) + m.group(3), s)
+    return SongPrompt(**kwargs)
 
 
 class OllamaClient:
@@ -275,7 +135,7 @@ class OllamaClient:
         """Call Ollama to generate a structured SongPrompt.
 
         Runs ollama.chat() in a thread to avoid blocking the async event loop.
-        Thinking mode is disabled (think=False) — not needed for JSON generation.
+        Thinking mode is disabled (think=False) — adds latency without improving output.
         """
         model = os.environ.get("OLLAMA_MODEL", self.model)
         target_duration = duration if duration is not None else MAX_DURATION_S
@@ -305,8 +165,9 @@ class OllamaClient:
 
         if is_instrumental:
             lyrics_rule = (
-                "- INSTRUMENTAL TRACK — there are no vocals. "
-                "Set the lyrics field to an empty string \"\"."
+                "- INSTRUMENTAL TRACK — absolutely NO sung text, no verses, no chorus, no words. "
+                "Under LYRICS:, write ONLY ACE-Step structure tags (e.g. [Intro] [Instrumental] [Guitar Solo] [Fade Out]). "
+                "Do NOT write any text content between or after the tags."
             )
         else:
             lang_name = _LANGUAGE_NAMES.get(language, language)
@@ -317,10 +178,10 @@ class OllamaClient:
             )
 
         vocal_style_rule = (
-            '- "vocal_style": Empty string "" (instrumental track, no vocals).'
+            "- VOCAL_STYLE: Leave empty (instrumental track, no vocals)."
             if is_instrumental else
-            '- "vocal_style": Vocal gender, timbre, and technique.\n'
-            '  Examples: "female vocal, breathy, soft", "male vocal, raspy, powerful belting", "choir, harmonies"'
+            "- VOCAL_STYLE: Vocal gender, timbre, and technique.\n"
+            "  Examples: female vocal, breathy, soft | male vocal, raspy, powerful belting | choir, harmonies"
         )
 
         system_prompt = f"""You are a creative AI radio DJ. Your job is to generate unique, \
@@ -332,48 +193,65 @@ SELECTED MOODS / KEYWORDS: {', '.join(keywords) if keywords else 'None specified
 
 CAPTION DIMENSIONS — fill each field with comma-separated descriptors:
 
-- "style": Genre, sub-genre, and optional era reference.
-  Examples: "smooth jazz, bebop influences", "80s synth-pop, retro", "indie folk, acoustic, Americana"
-- "instruments": Key instruments featured in the track.
-  Examples: "acoustic guitar, piano, soft strings", "synth bass, 808 drums, synth pads, electric guitar"
-- "mood": Emotion, atmosphere, and timbre texture adjectives.
-  Examples: "warm, nostalgic, intimate, airy", "dark, brooding, raw, punchy"
+- STYLE: Genre, sub-genre, and optional era reference.
+  Examples: smooth jazz, bebop influences | 80s synth-pop, retro | indie folk, acoustic, Americana
+- INSTRUMENTS: Key instruments featured in the track.
+  Examples: acoustic guitar, piano, soft strings | synth bass, 808 drums, synth pads, electric guitar
+- MOOD: Emotion, atmosphere, and timbre texture adjectives.
+  Examples: warm, nostalgic, intimate, airy | dark, brooding, raw, punchy
   Texture words that strongly influence output: warm, bright, crisp, airy, punchy, lush, raw, polished
 {vocal_style_rule}
-- "production": Production style, rhythm feel, and structure hints.
-  Examples: "lo-fi, bedroom pop, laid-back groove, building chorus", "studio-polished, driving beat, fade-out ending"
+- PRODUCTION: Production style, rhythm feel, and structure hints.
+  Examples: lo-fi, bedroom pop, laid-back groove, building chorus | studio-polished, driving beat, fade-out ending
 
 IMPORTANT:
-- Do NOT put BPM, key, or duration in any caption field — those have their own parameters.
+- Do NOT put BPM, key, or duration in any caption field — those have their own labels.
 - Avoid conflicting descriptors within a field (e.g., "ambient" + "aggressive" in mood).
-- The mood and vocal_style MUST be consistent with the lyrics you write.
+- The mood and vocal style MUST be consistent with the lyrics you write.
 - Vary the style, instruments, mood, and themes between songs — keep it fresh.
 
 LYRICS RULES:
 - {lyrics_rule}
 - Use ACE-Step structure tags: [Intro], [Verse], [Verse 1], [Verse 2], [Pre-Chorus], [Chorus], [Bridge], [Outro], [Fade Out]
-- {'Set lyrics to an empty string.' if is_instrumental else 'Include 3-5 sections. Always include at least one [Verse] and one [Chorus].'}
+- {'Skip this rule.' if is_instrumental else 'Include 3-5 sections. Always include at least one [Verse] and one [Chorus].'}
 - {'Skip this rule.' if is_instrumental else 'You may add [Instrumental], [Guitar Solo], or [Piano Interlude] for breaks.'}
 - {'Skip this rule.' if is_instrumental else 'You may combine a tag with ONE style modifier: [Chorus - anthemic], [Bridge - whispered], [Verse - spoken word]'}
 - {'Skip this rule.' if is_instrumental else 'Keep lines to 6-10 syllables for natural singing rhythm.'}
 - {'Skip this rule.' if is_instrumental else 'Separate sections with blank lines.'}
 - {'Skip this rule.' if is_instrumental else 'Use UPPERCASE sparingly for high-intensity climax lines in choruses.'}
-- {'Skip this rule.' if is_instrumental else 'Use parentheses for background vocals: "Into the light (into the light)"'}
+- {'Skip this rule.' if is_instrumental else 'Use parentheses for background vocals: Into the light (into the light)'}
 - {'Skip this rule.' if is_instrumental else 'Stick to one core metaphor per song for lyrical cohesion.'}
 - {'Skip this rule.' if is_instrumental else 'Lyrics should be creative and evocative, not generic or clichéd. Avoid adjective stacking and mixed metaphors.'}
 - {'The last section tag must always be [Fade Out] as a standalone tag with no lyrics under it — this signals ACE-Step to end the track with a natural fade.' if is_instrumental else 'The last section must always be [Fade Out]. It may contain a short repeating hook, ad-libs, or humming that fades out — or leave it as a standalone tag for a pure instrumental fade.'}
 
 METADATA RULES:
 - BPM range: 30–300. Match the genre naturally (slow 60–80, mid-tempo 90–120, fast 130–180+)
-- BPM and duration must be whole integers — no decimal points (e.g. 120, not 120.5)
-- Duration should be around {target_duration} seconds — it is fine if the actual audio runs slightly shorter or longer to allow a natural ending
+- BPM and DURATION must be whole integers — no decimal points (e.g. 120, not 120.5)
+- DURATION should be around {target_duration} seconds — it is fine if the actual audio runs slightly shorter or longer to allow a natural ending
 
-OUTPUT RULES:
-- Output ONLY a single JSON object. Do NOT write anything outside the JSON — no prose, no markdown, no code fences.
-- Put the lyrics INSIDE the JSON as the value of the "lyrics" field. Do NOT write lyrics after the closing brace.
-- Include ALL required fields: song_title, style, instruments, mood, vocal_style, production, lyrics, bpm, key_scale, duration.
-- Do NOT use emojis or special Unicode characters in any field. Use only plain ASCII text.
-- All field values must be valid JSON strings — no unescaped quotes or control characters."""
+OUTPUT FORMAT:
+Output ONLY the labeled plain-text format below. Do NOT output JSON, markdown, or code fences.
+Do NOT write anything before TITLE: or after the final lyrics line.
+
+TITLE: <song title>
+STYLE: <style descriptors>
+INSTRUMENTS: <instrument list>
+MOOD: <mood descriptors>
+VOCAL_STYLE: <vocal style, or leave empty for instrumental>
+PRODUCTION: <production descriptors>
+BPM: <integer>
+KEY: <musical key, e.g. A Minor, C Major, F# Minor>
+DURATION: <integer seconds>
+
+LYRICS:
+<full lyrics with all section tags>
+[Fade Out]
+
+RULES:
+- ALL nine labels (TITLE, STYLE, INSTRUMENTS, MOOD, VOCAL_STYLE, PRODUCTION, BPM, KEY, DURATION) must appear exactly once, each on its own line.
+- LYRICS: must be the last label. Write lyrics freely after it — no quoting or escaping needed.
+- BPM and DURATION must be whole integers with no decimal point.
+- Do NOT use emojis or special Unicode characters. Plain ASCII text only."""
 
         t0 = time.monotonic()
         try:
@@ -384,8 +262,7 @@ OUTPUT RULES:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": "Generate the next song for the radio station."},
                 ],
-                format=SongPrompt.model_json_schema(),
-                think=False,  # Disable Qwen3 chain-of-thought — adds latency without improving JSON output
+                think=False,  # Disable Qwen3 chain-of-thought — adds latency without improving output
             )
         except Exception as e:
             logger.error(f"[llm] Ollama chat() failed: {e}", exc_info=True)
@@ -396,12 +273,7 @@ OUTPUT RULES:
         logger.debug(f"[llm] Raw LLM response ({elapsed:.1f}s): {raw[:200]}...")
 
         try:
-            cleaned = _strip_code_fence(raw)
-            cleaned = _extract_song_prompt_json(cleaned)
-            cleaned = _fix_unescaped_quotes(cleaned)
-            cleaned = _fix_control_chars(cleaned)
-            cleaned = _fix_missing_commas(cleaned)
-            prompt = SongPrompt.model_validate_json(cleaned)
+            prompt = _parse_labeled_text(raw)
         except Exception as e:
             logger.error(f"[llm] Failed to parse LLM response into SongPrompt: {e}\nRaw: {raw}")
             raise
