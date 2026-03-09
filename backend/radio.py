@@ -106,9 +106,8 @@ class RadioOrchestrator:
         self._pending_promotion: bool = False  # Promote next viewer once prebuffer finishes
 
         # DJ mode
-        _DJ_LOCK_S = 360.0
-        self._DJ_LOCK_S: float = _DJ_LOCK_S
-        self._dj_lock_until: float = time.time() + _DJ_LOCK_S  # locked on server start
+        self._DJ_LOCK_S: float = 1800.0  # default 30 min; overridden by advanced_options.djLockSeconds
+        self._dj_lock_until: float = time.time() + self._DJ_LOCK_S  # locked on server start
         self._dj_claimant_ws: WebSocket | None = None  # WS that won claim but hasn't submitted yet
         self._dj_name: str = ""  # Current DJ name; drives title suffix for all subsequent tracks
 
@@ -190,6 +189,7 @@ class RadioOrchestrator:
         self.advanced_options = advanced_options or {}
         if self.advanced_options:
             self._saved_advanced_options = dict(self.advanced_options)
+            self._DJ_LOCK_S = float(self.advanced_options.get("djLockSeconds", self._DJ_LOCK_S))
         self.history = []
         self.next_track = None
         self._stop_event.clear()
@@ -323,6 +323,7 @@ class RadioOrchestrator:
         self.advanced_options = advanced_options or {}
         if self.advanced_options:
             self._saved_advanced_options = dict(self.advanced_options)
+            self._DJ_LOCK_S = float(self.advanced_options.get("djLockSeconds", self._DJ_LOCK_S))
         self.history = []        # Reset so new genre isn't biased by old session history
 
         # Discard any pre-buffered next track — it was generated with old settings
@@ -762,7 +763,7 @@ class RadioOrchestrator:
                 thinking=opts.get("thinking", True),
                 use_cot_caption=opts.get("useCotCaption", True),
                 use_cot_metas=opts.get("useCotMetas", True),
-                use_cot_language=opts.get("useCotLanguage", True),
+                use_cot_language=opts.get("useCotLanguage", False),
             )
         finally:
             _progress_task.cancel()

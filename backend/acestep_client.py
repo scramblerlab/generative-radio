@@ -197,7 +197,7 @@ class ACEStepClient:
         thinking: bool = True,
         use_cot_caption: bool = True,
         use_cot_metas: bool = True,
-        use_cot_language: bool = True,
+        use_cot_language: bool = False,
     ) -> tuple[bytes, dict]:
         """Full pipeline: submit → poll → download.
 

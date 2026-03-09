@@ -29,6 +29,10 @@ const DEFAULT_INFERENCE_STEPS = 8;
 const INFERENCE_STEPS_MIN = 4;
 const INFERENCE_STEPS_MAX = 100;
 
+const DEFAULT_DJ_LOCK_MINUTES = 30;
+const DJ_LOCK_MINUTES_MIN = 1;
+const DJ_LOCK_MINUTES_MAX = 120;
+
 interface GenreSelectorProps {
   onStart: (genres: string[], keywords: string[], language: string, feeling: string, djName: string, advancedOptions?: AdvancedOptions) => void;
   currentTrack: Track | null;
@@ -54,7 +58,8 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
   const [thinking, setThinking] = useState(true);
   const [useCotCaption, setUseCotCaption] = useState(true);
   const [useCotMetas, setUseCotMetas] = useState(true);
-  const [useCotLanguage, setUseCotLanguage] = useState(true);
+  const [useCotLanguage, setUseCotLanguage] = useState(false);
+  const [djLockMinutes, setDjLockMinutes] = useState(DEFAULT_DJ_LOCK_MINUTES);
 
   useEffect(() => {
     console.log('[GenreSelector] Fetching genres, keywords, and saved options');
@@ -76,6 +81,7 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
           if (savedOpts.useCotCaption !== undefined) setUseCotCaption(savedOpts.useCotCaption as boolean);
           if (savedOpts.useCotMetas !== undefined) setUseCotMetas(savedOpts.useCotMetas as boolean);
           if (savedOpts.useCotLanguage !== undefined) setUseCotLanguage(savedOpts.useCotLanguage as boolean);
+          if (savedOpts.djLockSeconds !== undefined) setDjLockMinutes(Math.round((savedOpts.djLockSeconds as number) / 60));
           console.log('[GenreSelector] Restored saved advanced options:', savedOpts);
         }
         setLoading(false);
@@ -160,6 +166,7 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
       useCotCaption,
       useCotMetas,
       useCotLanguage,
+      djLockSeconds: djLockMinutes * 60,
     };
     if (timeSignature) opts.timeSignature = timeSignature;
     const genreArg = isRandomGenre ? ['__random__'] : [selectedGenre];
@@ -414,6 +421,37 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            {/* DJ Cooldown */}
+            <div className="advanced-options__group">
+              <label className="advanced-options__label">
+                DJ Cooldown
+                <span className={`advanced-options__value ${djLockMinutes === DEFAULT_DJ_LOCK_MINUTES ? 'advanced-options__value--default' : ''}`}>
+                  {djLockMinutes} min
+                  {djLockMinutes === DEFAULT_DJ_LOCK_MINUTES && ' (default)'}
+                </span>
+              </label>
+              <div className="advanced-slider-wrapper">
+                <span className="advanced-slider__label">{DJ_LOCK_MINUTES_MIN}</span>
+                <div className="advanced-slider__track-wrapper">
+                  <input
+                    type="range"
+                    className="advanced-slider"
+                    min={DJ_LOCK_MINUTES_MIN}
+                    max={DJ_LOCK_MINUTES_MAX}
+                    step={1}
+                    value={djLockMinutes}
+                    onChange={(e) => setDjLockMinutes(Number(e.target.value))}
+                  />
+                  <div
+                    className="advanced-slider__default-mark"
+                    style={{ left: `${((DEFAULT_DJ_LOCK_MINUTES - DJ_LOCK_MINUTES_MIN) / (DJ_LOCK_MINUTES_MAX - DJ_LOCK_MINUTES_MIN)) * 100}%` }}
+                    title={`Default (${DEFAULT_DJ_LOCK_MINUTES} min)`}
+                  />
+                </div>
+                <span className="advanced-slider__label">{DJ_LOCK_MINUTES_MAX}</span>
               </div>
             </div>
           </div>
