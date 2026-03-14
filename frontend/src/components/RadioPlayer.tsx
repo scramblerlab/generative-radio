@@ -219,7 +219,9 @@ export function RadioPlayer({
               </p>
               {track.lyrics && (
                 <div className="player__lyrics">
-                  <p className="player__lyrics-text">{track.lyrics}</p>
+                  <div className="player__lyrics-scroll">
+                    <p className="player__lyrics-text">{track.lyrics}</p>
+                  </div>
                 </div>
               )}
             </div>

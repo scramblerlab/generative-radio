@@ -683,11 +683,15 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 }
 
 .player__lyrics {
-  max-height: 54px; /* 3 lines × 1.5 line-height × 12px font-size */
-  min-height: 0; /* fix: flex children default to min-height:auto, blocking max-height clipping */
-  overflow-y: auto;
+  height: 54px; /* 3 lines × 1.5 line-height × 12px font-size — fixed height, not max-height */
+  overflow: hidden; /* clip outer container — more reliable than overflow-y:auto on flex child */
   margin: 4px auto 0;
   max-width: 340px;
+}
+
+.player__lyrics-scroll {
+  height: 100%;
+  overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border-2) transparent;
 }
@@ -711,17 +715,14 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 }
 
 .player__mute-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: 30px;
   height: 30px;
-  padding: 0;
+  padding: 5px; /* (30px - 2px border×2 - 16px SVG) / 2 = 5px */
+  line-height: 0; /* remove descender gap under inline SVG */
   background: var(--accent);
   color: #000;
   border: 2px solid var(--accent);
   border-radius: var(--radius-sm);
-  overflow: hidden; /* fix: forces new BFC so background renders on macOS Chrome/Safari with appearance:none + display:flex */
   transition: opacity 0.15s, box-shadow 0.15s, transform 0.1s;
 }
 
