@@ -14,13 +14,34 @@ holds the **controller** role at a time; every other connection is a **viewer**.
 
 ## Role Assignment
 
-### First connection → controller
-When the very first WebSocket connects, it is immediately assigned the controller
-role. The server unicasts `role_assigned: controller` to that connection.
+### Local-network connections only → controller eligible
+Only connections whose resolved IP is a **private or loopback address** can be
+assigned the controller role:
 
-### Subsequent connections → viewer
-Any WebSocket that connects while a controller already exists receives
-`role_assigned: viewer`. Viewers never see the GenreSelector.
+| IP range | Classification |
+|---|---|
+| `127.x.x.x` | Loopback — always local |
+| `10.x.x.x` | RFC 1918 private |
+| `172.16.x.x – 172.31.x.x` | RFC 1918 private |
+| `192.168.x.x` | RFC 1918 private |
+| Any other | Remote — always viewer |
+
+The server resolves the real client IP by checking headers in order:
+1. `CF-Connecting-IP` — set by Cloudflare on all tunnel traffic (named + quick)
+2. `X-Forwarded-For` — standard reverse-proxy header (first entry)
+3. `ws.client.host` — raw socket peer (correct for direct LAN connections)
+
+This means remote visitors who open the Cloudflare tunnel URL are **always
+assigned the viewer role**, even if no controller is currently connected.
+
+### First local connection (when no controller exists) → controller
+When the very first local WebSocket connects and no controller is active,
+it is immediately assigned the controller role.  The server unicasts
+`role_assigned: controller` to that connection.
+
+### All other connections → viewer
+Any WebSocket that connects while a controller already exists, or any remote
+connection, receives `role_assigned: viewer`. Viewers never see the GenreSelector.
 
 ### Late-join state sync
 When a viewer connects while a session is active, the server immediately
@@ -78,8 +99,8 @@ shows "Waiting for host to start the radio…" in place of track info.
 
 ## Controller Promotion
 
-When the controller disconnects, the next viewer in connection order
-(first-come-first-get) is promoted.
+When the controller disconnects, the next **local** viewer in connection order is
+promoted.  Remote viewers are never promoted.
 
 **Promotion timing:**
 
@@ -95,9 +116,10 @@ When the controller disconnects, the next viewer in connection order
 - They can hit "Change genres" to stop the session and pick new genres
 - Other remaining viewers receive no change (they keep watching the track)
 
-**If no viewers remain when the controller disconnects:**
+**If no local viewers remain when the controller disconnects:**
 - `_controller_ws` is set to `None`
-- Next client to connect becomes the controller (fresh assignment)
+- Next **local** client to connect becomes the controller (fresh assignment)
+- Remote viewers continue watching but cannot take the controller role
 
 ---
 
@@ -137,11 +159,14 @@ All existing broadcast events (`track_ready`, `status`, `progress`,
 
 | Addition | Purpose |
 |---|---|
+| `_normalize_ip(raw)` | Normalises IPv6-mapped IPv4 addresses (e.g. `::ffff:192.168.1.1` → `192.168.1.1`) |
+| `_resolve_client_ip(ws)` | Reads real client IP from `CF-Connecting-IP` / `X-Forwarded-For` / `ws.client.host` |
+| `_is_local_ip(ip)` | Returns True for loopback and RFC 1918 private addresses (uses `ipaddress` stdlib) |
 | `_controller_ws: WebSocket \| None` | Tracks which connection is the controller |
 | `_pending_promotion: bool` | Deferred promotion flag (set when controller drops mid-generation) |
-| `add_ws(ws)` | Assign controller if none; else viewer. Unicast role. Send late-join snapshot if session active. |
+| `add_ws(ws)` | Resolves real IP; assigns controller only if local and no controller active; otherwise viewer |
 | `remove_ws(ws)` | If controller: promote immediately or defer. Clear `_controller_ws`. |
-| `_promote_next_controller()` | Picks first remaining WS, unicasts controller role, clears pending flag |
+| `_promote_next_controller()` | Picks first **local** remaining WS; skips remote viewers; unicasts controller role |
 | `_send_to(ws, message)` | Unicast helper (single WS, no broadcast loop) |
 | `_send_state_snapshot(ws)` | Unicasts current track + status to one late-joining WS |
 | `start_from_ws(ws, ...)` | Checks `ws == _controller_ws`; calls `start()` if authorised |
