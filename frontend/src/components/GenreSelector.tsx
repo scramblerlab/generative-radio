@@ -58,7 +58,7 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
   const [thinking, setThinking] = useState(true);
   const [useCotCaption, setUseCotCaption] = useState(true);
   const [useCotMetas, setUseCotMetas] = useState(true);
-  const [useCotLanguage, setUseCotLanguage] = useState(false);
+  const [useCotLanguage, setUseCotLanguage] = useState(true);
   const [djLockMinutes, setDjLockMinutes] = useState(DEFAULT_DJ_LOCK_MINUTES);
 
   useEffect(() => {

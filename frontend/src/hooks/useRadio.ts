@@ -38,6 +38,8 @@ export interface UseRadioReturn {
   unblockAudio: () => void;
   audioRef: RefObject<HTMLAudioElement | null>;
   progress: number; // 0–1
+  muted: boolean;       // Per-client mute state — never synced via WebSocket
+  toggleMute: () => void;
   // DJ mode
   djLocked: boolean;
   djUnlockAt: number;       // Unix timestamp (seconds) when DJ button becomes available
@@ -65,6 +67,7 @@ export function useRadio(): UseRadioReturn {
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [viewers, setViewers] = useState<ViewerInfo[]>([]);
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
+  const [muted, setMuted] = useState(false);
   const activityIdRef = useRef(0);
 
   // DJ mode state
@@ -485,6 +488,13 @@ export function useRadio(): UseRadioReturn {
 
   const closeDjPanel = useCallback(() => setDjPanelOpen(false), []);
 
+  const toggleMute = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.muted = !audio.muted;
+    setMuted(audio.muted);
+  }, []);
+
   return {
     role,
     status,
@@ -505,6 +515,8 @@ export function useRadio(): UseRadioReturn {
     unblockAudio,
     audioRef,
     progress,
+    muted,
+    toggleMute,
     djLocked,
     djUnlockAt,
     activeDjName,

@@ -90,6 +90,8 @@ export default function App() {
             audioDuration={radio.audioDuration}
             sessionInfo={sessionInfo}
             djName={djName}
+            muted={radio.muted}
+            onToggleMute={radio.toggleMute}
             onStop={handleStop}
             onRewind={radio.rewind}
             onBack={handleBack}
@@ -118,6 +120,8 @@ export default function App() {
               viewers={radio.viewers}
               sessionInfo={sessionInfo}
               djName={djName}
+              muted={radio.muted}
+              onToggleMute={radio.toggleMute}
               onSaveTrack={radio.currentTrack ? () => radio.saveTrack(radio.currentTrack!.id) : undefined}
               onStop={handleStop}
               onRewind={radio.rewind}

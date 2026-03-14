@@ -297,7 +297,7 @@ class TrackInfo(BaseModel):
 ### `acestep_client.py` — ACEStepClient
 
 - `thinking=True` for semantic audio code generation
-- `use_cot_caption=False`, `use_cot_metas=False`, `use_cot_language=False` — preserves our LLM-crafted captions and metadata
+- `use_cot_caption=False`, `use_cot_metas=False` — preserves our LLM-crafted captions and metadata; `use_cot_language=True` — LM must read lyrics to detect language and instrumental intent
 - Accepts advanced options: `time_signature`, `inference_steps`, `model`, `seed`
 - Model name auto-prefixed with `acestep-v15-` (e.g., `turbo` → `acestep-v15-turbo`)
 - Full debug logging of payload before submission
@@ -441,7 +441,7 @@ The `@property tags` concatenates all 5 into a single caption for ACE-Step.
 
 - `use_cot_caption=False` — don't rewrite our dimension-based caption
 - `use_cot_metas=False` — don't override our BPM/key/duration
-- `use_cot_language=False` — don't re-detect language
+- `use_cot_language=True` — let LM read lyrics to auto-detect vocal language and instrumental intent (required for Japanese and No Vocal to work correctly)
 
 See `docs/acestep-thinking-mode-analysis.md` for the full rationale.
 
