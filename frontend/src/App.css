@@ -684,6 +684,7 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 
 .player__lyrics {
   height: 54px; /* 3 lines × 1.5 line-height × 12px font-size — fixed height, not max-height */
+  min-height: 0; /* prevent flex min-height:auto from overriding the fixed height */
   overflow: hidden; /* clip outer container — more reliable than overflow-y:auto on flex child */
   margin: 4px auto 0;
   max-width: 340px;
