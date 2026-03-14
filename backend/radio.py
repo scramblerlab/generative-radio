@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import ipaddress
 import logging
 import random
 import time
@@ -33,6 +34,36 @@ def _normalize_ip(raw: str) -> str:
         if len(parts) == 4 and all(p.isdigit() for p in parts):
             return candidate
     return raw
+
+
+def _is_local_ip(ip: str) -> bool:
+    """Return True if the IP is a loopback or private (RFC 1918 / ULA) address."""
+    try:
+        addr = ipaddress.ip_address(ip)
+        return addr.is_loopback or addr.is_private
+    except ValueError:
+        return False
+
+
+def _resolve_client_ip(ws: WebSocket) -> str:
+    """Determine the real client IP, checking proxy/CDN headers first.
+
+    When served behind Cloudflare Tunnel, ws.client.host is always 127.0.0.1
+    (the local cloudflared process).  Cloudflare injects CF-Connecting-IP with
+    the actual visitor's IP, allowing us to distinguish local vs remote clients.
+    """
+    # Cloudflare: real visitor IP
+    cf_ip = ws.headers.get("cf-connecting-ip", "").strip()
+    if cf_ip:
+        return _normalize_ip(cf_ip)
+    # Standard reverse-proxy header: first entry is the originating client
+    forwarded = ws.headers.get("x-forwarded-for", "").strip()
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return _normalize_ip(first)
+    # Direct connection
+    return _normalize_ip(ws.client.host) if ws.client else "unknown"
 
 
 # Mapping from frontend merged category name → backend KEYWORDS category values
@@ -117,18 +148,20 @@ class RadioOrchestrator:
 
     def add_ws(self, ws: WebSocket) -> None:
         self._ws_connections.append(ws)
-        ip = _normalize_ip(ws.client.host) if ws.client else "unknown"
-        self._ws_meta[ws] = {"ip": ip, "connected_at": time.time()}
-        if self._controller_ws is None:
-            # First connection (or re-fill after controller left) → controller
+        ip = _resolve_client_ip(ws)
+        is_local = _is_local_ip(ip)
+        self._ws_meta[ws] = {"ip": ip, "connected_at": time.time(), "is_local": is_local}
+        if self._controller_ws is None and is_local:
+            # First local connection (or re-fill after controller left) → controller
             self._controller_ws = ws
             logger.info(f"[radio] WS connected as CONTROLLER ({ip}) — total: {len(self._ws_connections)}")
             asyncio.create_task(
                 self._send_to(ws, WSMessage(event="role_assigned", data={"role": "controller"}))
             )
         else:
-            # Subsequent connections → viewer; send role + late-join state snapshot
-            logger.info(f"[radio] WS connected as VIEWER ({ip}) — total: {len(self._ws_connections)}")
+            # Remote clients, or when a local controller already exists → viewer
+            reason = "remote client" if not is_local else "controller already active"
+            logger.info(f"[radio] WS connected as VIEWER ({ip}, {reason}) — total: {len(self._ws_connections)}")
             asyncio.create_task(self._send_viewer_snapshot(ws))
         asyncio.create_task(self._broadcast_listener_count())
         asyncio.create_task(self._broadcast_viewer_list_to_controller())
@@ -470,14 +503,18 @@ class RadioOrchestrator:
         )
 
     async def _promote_next_controller(self) -> None:
-        """Promote the first waiting viewer to the controller role."""
+        """Promote the first local viewer to the controller role."""
         self._pending_promotion = False
-        if not self._ws_connections:
-            logger.info("[radio] No viewers to promote — controller slot is vacant")
+        # Only local-network connections are eligible for the controller role
+        new_controller = next(
+            (ws for ws in self._ws_connections if self._ws_meta.get(ws, {}).get("is_local")),
+            None,
+        )
+        if new_controller is None:
+            logger.info("[radio] No local viewers to promote — controller slot is vacant")
             return
-        new_controller = self._ws_connections[0]
         self._controller_ws = new_controller
-        logger.info("[radio] Viewer promoted to controller")
+        logger.info("[radio] Local viewer promoted to controller")
         await self._send_to(
             new_controller,
             WSMessage(event="role_assigned", data={"role": "controller"}),

@@ -54,7 +54,7 @@
 
 ### Multi-Listener Model
 
-Multiple browser clients can connect simultaneously. The first connection becomes the **controller** (full UI: genre selection, start/stop/skip, "More Like This" seed pinning). All subsequent connections are **viewers** (read-only player, real-time audio sync). When the controller disconnects, the next viewer is promoted.
+Multiple browser clients can connect simultaneously. The first **local-network** connection becomes the **controller** (full UI: genre selection, start/stop/skip, "More Like This" seed pinning). Remote visitors (via Cloudflare tunnel) are always **viewers** (read-only player, real-time audio sync). When the controller disconnects, the next local viewer is promoted.
 
 ---
 
@@ -392,10 +392,22 @@ Progress stages: `llm_thinking` → `llm_done` → `acestep_start` → `acestep_
 
 | Connection | Role | UI |
 |---|---|---|
-| First WebSocket | Controller | GenreSelector → RadioPlayer (full controls + More Like This) |
-| All subsequent | Viewer | RadioPlayer (read-only, always) |
+| First **local-network** WebSocket | Controller | GenreSelector → RadioPlayer (full controls + More Like This) |
+| All remote connections | Viewer | RadioPlayer (read-only, always) |
+| Local connections when controller already active | Viewer | RadioPlayer (read-only) |
 
 Late-join state sync: viewers receive `role_assigned`, current `track_ready`, and `status` on connect. Controller promotion happens on disconnect (immediate or deferred during generation). Seed is cleared on controller disconnect.
+
+### Controller Access Restriction (Local Network Only)
+
+Only connections originating from a **private / loopback IP address** (RFC 1918: `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, or `127.x.x.x`) can be assigned the controller role. Remote visitors — e.g. friends opening the Cloudflare tunnel URL — always receive `role_assigned: viewer` regardless of connection order.
+
+**IP detection order** (`backend/radio.py: _resolve_client_ip`):
+1. `CF-Connecting-IP` header — injected by Cloudflare with the real visitor IP (works for both named and quick tunnels)
+2. `X-Forwarded-For` header — first entry (standard reverse-proxy convention)
+3. `ws.client.host` — raw socket peer (correct for direct LAN connections)
+
+**Promotion restriction:** when the controller disconnects, `_promote_next_controller()` skips remote viewers and only promotes the first local viewer in the queue. If no local viewers remain, the controller slot stays vacant until a local client connects.
 
 ---
 
@@ -524,6 +536,8 @@ Formula: `memory_GB(t) = 9.7 + (t − 60) × 0.197`
 **Quick Tunnel (dev fallback):** Random `*.trycloudflare.com` URL. Used when no named tunnel config exists.
 
 Both support WebSocket proxying natively. Configurable via `TUNNEL_NAME` and `TUNNEL_DOMAIN` env vars.
+
+**Security interaction:** Cloudflare injects the `CF-Connecting-IP` header on all tunnel traffic (named and quick). The backend reads this header to obtain the real visitor IP and determine whether they are on the local network. Remote visitors are automatically restricted to the viewer role. See §10 for the full access restriction model.
 
 ---
 
