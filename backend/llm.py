@@ -25,6 +25,34 @@ _LANGUAGE_NAMES: dict[str, str] = {
     "ko": "Korean",
 }
 
+# Unicode ranges used to verify the model actually wrote in the requested script.
+# Keyed by language code; value is a list of (start, end) codepoint ranges.
+# If ANY character in the lyrics falls in any range, the check passes.
+_SCRIPT_RANGES: dict[str, list[tuple[int, int]]] = {
+    "ja": [(0x3040, 0x30FF), (0x4E00, 0x9FFF)],   # Hiragana, Katakana, CJK
+    "ko": [(0xAC00, 0xD7A3), (0x1100, 0x11FF)],    # Hangul syllables + Jamo
+    "zh": [(0x4E00, 0x9FFF), (0x3400, 0x4DBF)],    # CJK unified + extension A
+    "el": [(0x0370, 0x03FF)],                       # Greek
+    "ar": [(0x0600, 0x06FF)],                       # Arabic
+}
+
+
+def _lyrics_match_language(lyrics: str, language: str) -> bool:
+    """Return True if lyrics contain at least one character in the expected script.
+
+    Returns True unconditionally for languages without a distinct Unicode script
+    (e.g. Latin-script languages like Spanish, French) since we cannot reliably
+    distinguish them from English at the character level.
+    """
+    ranges = _SCRIPT_RANGES.get(language)
+    if not ranges:
+        return True  # no script check available — assume OK
+    for ch in lyrics:
+        cp = ord(ch)
+        if any(lo <= cp <= hi for lo, hi in ranges):
+            return True
+    return False
+
 _FIELD_RE = re.compile(r"^([A-Z][A-Z_0-9]*)\s*:\s*(.*)", re.IGNORECASE | re.MULTILINE)
 
 _KEY_MAP = {
@@ -123,29 +151,19 @@ class OllamaClient:
         self.model = model or OLLAMA_MODEL
         logger.info(f"[llm] OllamaClient initialized — model: {self.model}")
 
-    async def generate_prompt(
+    def _build_system_prompt(
         self,
         genres: list[str],
         keywords: list[str],
         history: list[str],
-        duration: int | None = None,
-        language: str = "en",
-        feeling: str = "",
-    ) -> SongPrompt:
-        """Call Ollama to generate a structured SongPrompt.
-
-        Runs ollama.chat() in a thread to avoid blocking the async event loop.
-        Thinking mode is disabled (think=False) — adds latency without improving output.
-        """
-        model = os.environ.get("OLLAMA_MODEL", self.model)
-        target_duration = duration if duration is not None else MAX_DURATION_S
-        is_instrumental = language == "instrumental"
-        logger.info(
-            f"[llm] Generating prompt — model: {model}, "
-            f"genres: {genres}, keywords: {keywords}, "
-            f"history_length: {len(history)}, target_duration: {target_duration}s, "
-            f"language: {language}, feeling: {feeling[:50]!r}"
-        )
+        target_duration: int,
+        language: str,
+        feeling: str,
+        is_instrumental: bool,
+        language_retry: bool = False,
+    ) -> tuple[str, str]:
+        """Build (system_prompt, user_message) for the Ollama chat call."""
+        lang_name = _LANGUAGE_NAMES.get(language, language)
 
         feeling_section = ""
         if feeling.strip():
@@ -169,13 +187,32 @@ class OllamaClient:
                 "Under LYRICS:, write ONLY ACE-Step structure tags (e.g. [Intro] [Instrumental] [Guitar Solo] [Fade Out]). "
                 "Do NOT write any text content between or after the tags."
             )
+            critical_language_block = ""
         else:
-            lang_name = _LANGUAGE_NAMES.get(language, language)
             lyrics_rule = (
                 f"- Write all lyrics in {lang_name}. "
                 f"Every word of every lyric section must be in {lang_name}. "
                 "Do not mix in English or any other language."
             )
+            if language != "en":
+                emphasis = (
+                    "Your previous attempt used the wrong language. You MUST write lyrics in "
+                    f"{lang_name} this time. Writing English lyrics is an error.\n"
+                    if language_retry else ""
+                )
+                critical_language_block = (
+                    f"\n{'=' * 60}\n"
+                    f"CRITICAL REQUIREMENT: LYRICS LANGUAGE = {lang_name.upper()}\n"
+                    f"{'=' * 60}\n"
+                    f"{emphasis}"
+                    f"The user has selected {lang_name} as the lyrics language.\n"
+                    f"ALL lyrics MUST be written entirely in {lang_name}.\n"
+                    f"Every word, every line, every section — {lang_name} only.\n"
+                    f"Do NOT write any lyrics in English or any other language.\n"
+                    f"{'=' * 60}\n"
+                )
+            else:
+                critical_language_block = ""
 
         vocal_style_rule = (
             "- VOCAL_STYLE: Leave empty (instrumental track, no vocals)."
@@ -186,7 +223,7 @@ class OllamaClient:
 
         system_prompt = f"""You are a creative AI radio DJ. Your job is to generate unique, \
 original song prompts for an AI music generator (ACE-Step).
-
+{critical_language_block}
 SELECTED GENRES: {', '.join(genres)}
 SELECTED MOODS / KEYWORDS: {', '.join(keywords) if keywords else 'None specified'}
 {feeling_section}{history_section}
@@ -253,6 +290,75 @@ RULES:
 - BPM and DURATION must be whole integers with no decimal point.
 - Do NOT use emojis or special Unicode characters. Plain ASCII text only."""
 
+        user_message = "Generate the next song for the radio station."
+        if not is_instrumental and language != "en":
+            user_message += f" Remember: all lyrics must be in {lang_name} only — no English."
+
+        return system_prompt, user_message
+
+    async def generate_prompt(
+        self,
+        genres: list[str],
+        keywords: list[str],
+        history: list[str],
+        duration: int | None = None,
+        language: str = "en",
+        feeling: str = "",
+    ) -> SongPrompt:
+        """Call Ollama to generate a structured SongPrompt.
+
+        Runs ollama.chat() in a thread to avoid blocking the async event loop.
+        For non-English languages, validates the generated lyrics contain the
+        expected script and retries once with stronger emphasis if they don't.
+        """
+        model = os.environ.get("OLLAMA_MODEL", self.model)
+        target_duration = duration if duration is not None else MAX_DURATION_S
+        is_instrumental = language == "instrumental"
+        logger.info(
+            f"[llm] Generating prompt — model: {model}, "
+            f"genres: {genres}, keywords: {keywords}, "
+            f"history_length: {len(history)}, target_duration: {target_duration}s, "
+            f"language: {language}, feeling: {feeling[:50]!r}"
+        )
+
+        prompt = await self._call_llm(
+            model, genres, keywords, history, target_duration,
+            language, feeling, is_instrumental, language_retry=False,
+        )
+
+        # Language validation: if the model ignored the language requirement, retry once.
+        if not is_instrumental and not _lyrics_match_language(prompt.lyrics, language):
+            lang_name = _LANGUAGE_NAMES.get(language, language)
+            logger.warning(
+                f"[llm] Language mismatch — expected {lang_name} script not found in lyrics. "
+                "Retrying with stronger emphasis."
+            )
+            prompt = await self._call_llm(
+                model, genres, keywords, history, target_duration,
+                language, feeling, is_instrumental, language_retry=True,
+            )
+            if not _lyrics_match_language(prompt.lyrics, language):
+                logger.warning(f"[llm] Language mismatch persists after retry — using result as-is.")
+
+        return prompt
+
+    async def _call_llm(
+        self,
+        model: str,
+        genres: list[str],
+        keywords: list[str],
+        history: list[str],
+        target_duration: int,
+        language: str,
+        feeling: str,
+        is_instrumental: bool,
+        language_retry: bool,
+    ) -> SongPrompt:
+        system_prompt, user_message = self._build_system_prompt(
+            genres, keywords, history, target_duration,
+            language, feeling, is_instrumental, language_retry,
+        )
+
         t0 = time.monotonic()
         try:
             response = await asyncio.to_thread(
@@ -260,7 +366,7 @@ RULES:
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": "Generate the next song for the radio station."},
+                    {"role": "user", "content": user_message},
                 ],
                 think=False,  # Disable Qwen3 chain-of-thought — adds latency without improving output
                 keep_alive=0,  # Unload model immediately — frees ~2.5GB before ACE-Step VAE decode
