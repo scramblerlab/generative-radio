@@ -48,7 +48,7 @@ export interface AdvancedOptions {
   thinking: boolean;         // default true — semantic audio code generation
   useCotCaption: boolean;    // default true
   useCotMetas: boolean;      // default true
-  useCotLanguage: boolean;   // default false
+  useCotLanguage: boolean;   // default true — LM reads lyrics to detect language AND instrumental intent
   djLockSeconds: number;     // DJ cooldown duration in seconds, default 1800
 }
 

@@ -263,6 +263,7 @@ RULES:
                     {"role": "user", "content": "Generate the next song for the radio station."},
                 ],
                 think=False,  # Disable Qwen3 chain-of-thought — adds latency without improving output
+                keep_alive=0,  # Unload model immediately — frees ~2.5GB before ACE-Step VAE decode
             )
         except Exception as e:
             logger.error(f"[llm] Ollama chat() failed: {e}", exc_info=True)

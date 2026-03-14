@@ -53,10 +53,10 @@ Keep `thinking=True` for semantic code generation. Disable all three CoT sub-fea
 
 ```python
 payload = {
-    "thinking": True,           # Keep -- generates semantic audio codes for DiT
-    "use_cot_caption": False,   # Disable -- don't rewrite our dimension-based caption
-    "use_cot_metas": False,     # Disable -- don't override our BPM/key/duration
-    "use_cot_language": False,  # Disable -- don't re-detect language, we provide it
+    "thinking": True,          # Keep -- generates semantic audio codes for DiT
+    "use_cot_caption": False,  # Disable -- don't rewrite our dimension-based caption
+    "use_cot_metas": False,    # Disable -- don't override our BPM/key/duration
+    "use_cot_language": True,  # Keep ON -- LM must read lyrics to detect language AND instrumental intent
 }
 ```
 
@@ -65,8 +65,10 @@ payload = {
 1. **Semantic codes preserved** -- melody, chords, and orchestration are encoded as latent hints for DiT, producing higher quality audio than text-only conditioning
 2. **Caption preserved** -- our carefully crafted dimension-based captions (style, instruments, mood, vocal_style, production) are passed through to DiT unchanged
 3. **Metadata preserved** -- BPM, key, and duration from our Ollama LLM are respected exactly as provided
-4. **Language preserved** -- the vocal language selected by the user is used directly
-5. **Slightly faster** -- skipping Phase 1 CoT saves a few seconds of LM inference time
+4. **Language correctly applied** -- with `use_cot_language=True`, the LM reads lyrics to auto-detect the vocal language (e.g. Japanese from Japanese lyrics). Without this, the explicit `vocal_language` parameter alone is unreliable.
+5. **Instrumental correctly applied** -- with `use_cot_language=True`, the LM reads `[Instrumental]` tags in lyrics and suppresses vocals. Without this, the LM ignores the instrumental intent and may generate vocals anyway.
+
+> **Note:** `use_cot_language=False` was previously set to "preserve" the user's language selection, but this was incorrect. The ACE-Step tutorial states the LM *auto-detects from lyrics* — meaning our LLM-generated lyrics (already in the right language or with `[Instrumental]` tags) are the primary signal, not the raw `vocal_language` parameter.
 
 ### What would happen if we disabled thinking entirely
 

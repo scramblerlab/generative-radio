@@ -682,6 +682,58 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   margin-top: 2px;
 }
 
+.player__lyrics {
+  max-height: 54px; /* 3 lines × 1.5 line-height × 12px font-size */
+  min-height: 0; /* fix: flex children default to min-height:auto, blocking max-height clipping */
+  overflow-y: auto;
+  margin: 4px auto 0;
+  max-width: 340px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+
+.player__lyrics-text {
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: center;
+  margin: 0;
+}
+
+/* Mute button — sits flush-right below progress bar */
+.player__mute-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: -20px 0 8px;
+}
+
+.player__mute-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: var(--accent);
+  color: #000;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  overflow: hidden; /* fix: forces new BFC so background renders on macOS Chrome/Safari with appearance:none + display:flex */
+  transition: opacity 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+
+.player__mute-btn:hover {
+  opacity: 0.85;
+  box-shadow: 0 0 14px var(--accent-glow);
+}
+
+.player__mute-btn:active {
+  transform: scale(0.95);
+}
+
 /* Progress bar */
 .player__progress {
   height: 3px;
