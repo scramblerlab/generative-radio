@@ -30,11 +30,6 @@ export default function App() {
     }
   };
 
-  const handleStop = async () => {
-    await radio.stop();
-    setView('selector');
-  };
-
   const handleBack = () => {
     // Do NOT stop — audio keeps playing while controller browses genres
     setView('selector');
@@ -90,10 +85,10 @@ export default function App() {
             audioDuration={radio.audioDuration}
             sessionInfo={sessionInfo}
             djName={djName}
-            muted={radio.muted}
-            onToggleMute={radio.toggleMute}
-            onStop={handleStop}
-            onRewind={radio.rewind}
+            localPaused={radio.localPaused}
+            onTogglePlayPause={radio.togglePlayPause}
+            onSeekBackward={radio.seekBackward}
+            onSeekForward={radio.seekForward}
             onBack={handleBack}
             onUnblockAudio={radio.unblockAudio}
             djUnlockAt={radio.djUnlockAt}
@@ -119,11 +114,11 @@ export default function App() {
               viewers={radio.viewers}
               sessionInfo={sessionInfo}
               djName={djName}
-              muted={radio.muted}
-              onToggleMute={radio.toggleMute}
+              localPaused={radio.localPaused}
+              onTogglePlayPause={radio.togglePlayPause}
+              onSeekBackward={radio.seekBackward}
+              onSeekForward={radio.seekForward}
               onSaveTrack={radio.currentTrack ? () => radio.saveTrack(radio.currentTrack!.id) : undefined}
-              onStop={handleStop}
-              onRewind={radio.rewind}
               onBack={handleBack}
               onUnblockAudio={radio.unblockAudio}
               djUnlockAt={radio.djUnlockAt}

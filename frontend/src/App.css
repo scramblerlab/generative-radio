@@ -717,34 +717,6 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   margin: 0;
 }
 
-/* Mute button — sits flush-right below progress bar */
-.player__mute-row {
-  display: flex;
-  justify-content: flex-end;
-  margin: -20px 0 8px;
-}
-
-.player__mute-btn {
-  width: 30px;
-  height: 30px;
-  padding: 5px; /* (30px - 2px border×2 - 16px SVG) / 2 = 5px */
-  line-height: 0; /* remove descender gap under inline SVG */
-  background: var(--accent);
-  color: #000;
-  border: 2px solid var(--accent);
-  border-radius: var(--radius-sm);
-  transition: opacity 0.15s, box-shadow 0.15s, transform 0.1s;
-}
-
-.player__mute-btn:hover {
-  opacity: 0.85;
-  box-shadow: 0 0 14px var(--accent-glow);
-}
-
-.player__mute-btn:active {
-  transform: scale(0.95);
-}
-
 /* Progress bar */
 .player__progress {
   height: 3px;
@@ -794,8 +766,8 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 
 /* Rewind + Skip — shared icon button style */
 .player__icon-btn {
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   background: var(--surface-2);
   border: 1.5px solid var(--border);
@@ -806,7 +778,7 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   transition: border-color 0.15s, color 0.15s, transform 0.1s;
 }
 
-.player__icon-btn svg { width: 20px; height: 20px; }
+.player__icon-btn svg { width: 24px; height: 24px; }
 
 .player__icon-btn:not(:disabled):hover {
   border-color: var(--border-2);
@@ -814,9 +786,6 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 }
 
 .player__icon-btn:not(:disabled):active { transform: scale(0.93); }
-
-.player__icon-btn--spacer { visibility: hidden; pointer-events: none; }
-
 
 /* Activity log */
 .activity-log {

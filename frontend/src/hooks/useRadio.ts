@@ -34,12 +34,13 @@ export interface UseRadioReturn {
   start: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => Promise<void>;
   stop: () => Promise<void>;
   updateSettings: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => void;
-  rewind: () => void;
   unblockAudio: () => void;
   audioRef: RefObject<HTMLAudioElement | null>;
   progress: number; // 0–1
-  muted: boolean;       // Per-client mute state — never synced via WebSocket
-  toggleMute: () => void;
+  localPaused: boolean; // True when user has locally paused playback (audio.pause())
+  togglePlayPause: () => void;
+  seekBackward: () => void; // Seek -10s
+  seekForward: () => void;  // Seek +10s
   // DJ mode
   djLocked: boolean;
   djUnlockAt: number;       // Unix timestamp (seconds) when DJ button becomes available
@@ -67,7 +68,7 @@ export function useRadio(): UseRadioReturn {
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [viewers, setViewers] = useState<ViewerInfo[]>([]);
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
-  const [muted, setMuted] = useState(false);
+  const [localPaused, setLocalPaused] = useState(false);
   const activityIdRef = useRef(0);
 
   // DJ mode state
@@ -152,6 +153,21 @@ export function useRadio(): UseRadioReturn {
     console.log('[Audio] Playing track:', track.songTitle);
     setCurrentTrack(track);
     setProgress(0);
+
+    setLocalPaused(false);
+
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: track.songTitle,
+        artist: track.genre,
+        album: 'Generative Radio',
+        artwork: [
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+        ],
+      });
+      navigator.mediaSession.playbackState = 'playing';
+    }
     setAudioDuration(null);
     setErrorMessage(null);
 
@@ -379,6 +395,33 @@ export function useRadio(): UseRadioReturn {
     return () => audio.removeEventListener('ended', handleTrackEnded);
   }, [handleTrackEnded]);
 
+  // Register Media Session action handlers (Lock Screen / Dynamic Island controls)
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.setActionHandler('play', () => {
+      audioRef.current?.play().catch(() => {});
+      navigator.mediaSession.playbackState = 'playing';
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      audioRef.current?.pause();
+      navigator.mediaSession.playbackState = 'paused';
+    });
+    navigator.mediaSession.setActionHandler('seekbackward', () => {
+      if (audioRef.current) audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10);
+    });
+    navigator.mediaSession.setActionHandler('seekforward', () => {
+      if (audioRef.current) audioRef.current.currentTime = Math.min(audioRef.current.duration || 0, audioRef.current.currentTime + 10);
+    });
+    return () => {
+      navigator.mediaSession.setActionHandler('play', null);
+      navigator.mediaSession.setActionHandler('pause', null);
+      navigator.mediaSession.setActionHandler('seekbackward', null);
+      navigator.mediaSession.setActionHandler('seekforward', null);
+    };
+  // audioRef is stable; register once at mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ------------------------------------------------------------------ //
   // Public API
   // ------------------------------------------------------------------ //
@@ -429,6 +472,10 @@ export function useRadio(): UseRadioReturn {
   const stop = useCallback(async () => {
     console.log('[Radio] Stop requested');
     audioRef.current?.pause();
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.playbackState = 'none';
+    }
     nextTrackRef.current = null;
     clearPreloadBlob();
     clearActiveBlob();
@@ -449,20 +496,6 @@ export function useRadio(): UseRadioReturn {
       .then(() => setAudioBlocked(false))
       .catch((err) => console.error('[Audio] unblockAudio play() failed:', err));
   }, []);
-
-  const rewind = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio || !currentTrack) {
-      console.warn('[Audio] Rewind ignored — no track loaded');
-      return;
-    }
-    console.log('[Audio] Rewinding to beginning:', currentTrack.songTitle);
-    audio.currentTime = 0;
-    setProgress(0);
-    audio.play().catch((err) => {
-      console.error('[Audio] Play after rewind failed:', err);
-    });
-  }, [currentTrack]);
 
   const saveTrack = useCallback(async (trackId: string): Promise<void> => {
     const res = await fetch(`/api/tracks/${trackId}/save`, { method: 'POST' });
@@ -488,11 +521,30 @@ export function useRadio(): UseRadioReturn {
 
   const closeDjPanel = useCallback(() => setDjPanelOpen(false), []);
 
-  const toggleMute = useCallback(() => {
+  const togglePlayPause = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.muted = !audio.muted;
-    setMuted(audio.muted);
+    if (audio.paused) {
+      audio.play().catch(() => {});
+      setLocalPaused(false);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+    } else {
+      audio.pause();
+      setLocalPaused(true);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    }
+  }, []);
+
+  const seekBackward = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = Math.max(0, audio.currentTime - 10);
+  }, []);
+
+  const seekForward = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 10);
   }, []);
 
   return {
@@ -511,12 +563,13 @@ export function useRadio(): UseRadioReturn {
     start,
     stop,
     updateSettings,
-    rewind,
     unblockAudio,
     audioRef,
     progress,
-    muted,
-    toggleMute,
+    localPaused,
+    togglePlayPause,
+    seekBackward,
+    seekForward,
     djLocked,
     djUnlockAt,
     activeDjName,
