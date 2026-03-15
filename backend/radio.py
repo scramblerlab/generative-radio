@@ -119,6 +119,7 @@ class RadioOrchestrator:
         # Async primitives
         self._task: asyncio.Task | None = None
         self._prebuffer_task: asyncio.Task | None = None  # Background generation task
+        self._play_now_task: asyncio.Task | None = None   # Watchdog: fire play_now if ended never arrives
         self._stop_event = asyncio.Event()
         self._track_ended_event = asyncio.Event()
         self._next_track_ready_event = asyncio.Event()
@@ -238,6 +239,34 @@ class RadioOrchestrator:
         logger.info(f"[radio] Starting session — genres: {genres}, keywords: {keywords}, language: {language}, feeling: {feeling[:50]!r}, advanced: {self.advanced_options}")
         self._task = asyncio.create_task(self._radio_loop(), name="radio-loop")
 
+    # ------------------------------------------------------------------ #
+    # Play-now watchdog (server-side safety net for unreliable `ended`)
+    # ------------------------------------------------------------------ #
+
+    async def _play_now_watchdog(self, track_id: str, delay: float) -> None:
+        """Sleep delay seconds, then push play_now if still on the same track."""
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        if self.current_track and self.current_track.id == track_id and not self._stop_event.is_set():
+            logger.info(f"[radio] play_now watchdog fired for track {track_id} — frontend missed 'ended'")
+            await self.broadcast(WSMessage(event="play_now", data={"for_track_id": track_id}))
+
+    def _start_play_now_watchdog(self, track: "TrackInfo") -> None:
+        """Start (or restart) the watchdog for the given track."""
+        self._cancel_play_now_watchdog()
+        delay = float(track.duration + 3)
+        self._play_now_task = asyncio.ensure_future(
+            self._play_now_watchdog(track.id, delay)
+        )
+        logger.debug(f"[radio] play_now watchdog scheduled in {delay:.0f}s for '{track.song_title}'")
+
+    def _cancel_play_now_watchdog(self) -> None:
+        if self._play_now_task and not self._play_now_task.done():
+            self._play_now_task.cancel()
+        self._play_now_task = None
+
     async def stop(self) -> None:
         """Stop the radio session and clean up resources."""
         logger.info("[radio] Stop requested")
@@ -245,6 +274,7 @@ class RadioOrchestrator:
         self._track_ended_event.set()      # Unblock waiting loop
         self._next_track_ready_event.set() # Unblock buffering wait
 
+        self._cancel_play_now_watchdog()
         self._cancel_prebuffer()
 
         if self._task and not self._task.done():
@@ -266,6 +296,7 @@ class RadioOrchestrator:
     async def skip(self) -> None:
         """Skip the current track — signal the radio loop to advance."""
         logger.info("[radio] Skip requested — signalling track_ended")
+        self._cancel_play_now_watchdog()
         self._track_ended_event.set()
 
     async def on_track_ended(self) -> None:
@@ -285,6 +316,7 @@ class RadioOrchestrator:
             return
         self._last_track_ended_at = now
         logger.info("[radio] Track-ended signal accepted — advancing to next track")
+        self._cancel_play_now_watchdog()
         self._track_ended_event.set()
 
     # ------------------------------------------------------------------ #
@@ -579,6 +611,7 @@ class RadioOrchestrator:
             self.state = RadioState.PLAYING
             await self._broadcast_track_ready(current, is_next=False)
             await self._broadcast_status("playing", "Playing — generating next track...")
+            self._start_play_now_watchdog(current)
 
             # Start pre-generating the second track in the background
             self._start_prebuffer()
@@ -616,6 +649,8 @@ class RadioOrchestrator:
                         logger.debug(f"[radio] Evicted caches for finished track: {old_id}")
                     self.state = RadioState.PLAYING
                     await self._broadcast_status("playing", "Playing — generating next track...")
+                    if self.current_track:
+                        self._start_play_now_watchdog(self.current_track)
                 else:
                     # Buffering path: next track still generating — wait for it.
                     logger.info("[radio] Next track not ready — entering buffering state")
@@ -643,6 +678,7 @@ class RadioOrchestrator:
                     logger.info(f"[radio] Buffering done — now playing: '{track.song_title}'")
                     await self._broadcast_track_ready(track, is_next=False)
                     await self._broadcast_status("playing", "Playing — generating next track...")
+                    self._start_play_now_watchdog(track)
 
                 # Kick off next-next track generation, cancelling any stale task first
                 self._start_prebuffer()

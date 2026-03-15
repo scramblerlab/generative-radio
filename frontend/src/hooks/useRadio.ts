@@ -82,6 +82,8 @@ export function useRadio(): UseRadioReturn {
   const nextTrackRef = useRef<Track | null>(null);        // Pre-buffered next track metadata
   const preloadBlobUrlRef = useRef<string | null>(null);  // In-memory blob URL for the next track
   const activeBlobUrlRef = useRef<string | null>(null);   // Blob URL currently being played (revoke on next transition)
+  const currentTrackRef = useRef<Track | null>(null);     // Ref mirror of currentTrack (stale-closure safe for WS callbacks)
+  const localPausedRef = useRef<boolean>(false);          // Ref mirror of localPaused (stale-closure safe)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelay = useRef(RECONNECT_BASE_MS);
   const isActiveRef = useRef(false);                      // True while radio should maintain WS
@@ -152,9 +154,16 @@ export function useRadio(): UseRadioReturn {
   const playTrack = useCallback((track: Track) => {
     console.log('[Audio] Playing track:', track.songTitle);
     setCurrentTrack(track);
+    currentTrackRef.current = track;
     setProgress(0);
 
-    setLocalPaused(false);
+    // Preserve pause state if user was paused (e.g. watchdog-forced transition while paused).
+    // Otherwise clear it so the new track auto-plays.
+    const keepPaused = localPausedRef.current;
+    if (!keepPaused) {
+      setLocalPaused(false);
+      localPausedRef.current = false;
+    }
 
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
@@ -166,7 +175,7 @@ export function useRadio(): UseRadioReturn {
           { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
         ],
       });
-      navigator.mediaSession.playbackState = 'playing';
+      navigator.mediaSession.playbackState = keepPaused ? 'paused' : 'playing';
     }
     setAudioDuration(null);
     setErrorMessage(null);
@@ -192,17 +201,22 @@ export function useRadio(): UseRadioReturn {
         activeBlobUrlRef.current = null;
       }
 
-      audio.play()
-        .then(() => setAudioBlocked(false))
-        .catch((err) => {
-          console.error('[Audio] play() failed:', err);
-          // Browsers block autoplay when there has been no prior user gesture.
-          // Surface a "Tap to Listen" button so the viewer can unlock audio manually.
-          if (err instanceof DOMException && err.name === 'NotAllowedError') {
-            console.log('[Audio] Autoplay blocked — user gesture required');
-            setAudioBlocked(true);
-          }
-        });
+      if (!keepPaused) {
+        audio.play()
+          .then(() => setAudioBlocked(false))
+          .catch((err) => {
+            console.error('[Audio] play() failed:', err.name, err.message);
+            // Browsers block autoplay when there has been no prior user gesture.
+            // Surface a "Tap to Listen" button so the viewer can unlock audio manually.
+            if (err instanceof DOMException && err.name === 'NotAllowedError') {
+              console.log('[Audio] Autoplay blocked — user gesture required');
+              setAudioBlocked(true);
+            }
+            // AbortError / NotSupportedError are now logged above (not silently dropped)
+          });
+      } else {
+        console.log('[Audio] Track loaded but kept paused (watchdog transition while paused)');
+      }
     }
   }, [clearActiveBlob]);
 
@@ -350,6 +364,16 @@ export function useRadio(): UseRadioReturn {
         const { granted } = msg.data as unknown as DjClaimAckData;
         console.log('[DJ] Claim ack — granted:', granted);
         if (granted) setDjPanelOpen(true);
+      } else if (msg.event === 'play_now') {
+        // Server-side watchdog: fired when frontend missed the `ended` event
+        // (iOS Safari backgrounded, screen locked, audio interruption, etc.)
+        const { for_track_id } = msg.data as { for_track_id: string };
+        if (currentTrackRef.current?.id === for_track_id) {
+          console.log('[Radio] play_now watchdog — forcing track transition for:', for_track_id);
+          handleTrackEnded();
+        } else {
+          console.log('[Radio] play_now ignored — already advanced past:', for_track_id);
+        }
       }
     };
 
@@ -527,10 +551,12 @@ export function useRadio(): UseRadioReturn {
     if (audio.paused) {
       audio.play().catch(() => {});
       setLocalPaused(false);
+      localPausedRef.current = false;
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     } else {
       audio.pause();
       setLocalPaused(true);
+      localPausedRef.current = true;
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     }
   }, []);
