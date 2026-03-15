@@ -30,6 +30,7 @@
 19. [Remote Access (Cloudflare Tunnel)](#19-remote-access-cloudflare-tunnel)
 20. [Debugging & Logging](#20-debugging--logging)
 21. [Design System](#21-design-system)
+22. [Progressive Web App (PWA)](#22-progressive-web-app-pwa)
 
 ---
 
@@ -41,7 +42,7 @@
 
 1. User picks **one genre** and optional **mood keywords** (organized by category)
 2. User selects a **vocal language** (11 languages or instrumental)
-3. Optionally types a **free-text feeling** ("Late night coding session, need focus")
+3. Optionally types a **free-text "what are you doing now?"** ("Late night coding session, need focus")
 4. Optionally configures **advanced options** (time signature, inference steps, DiT model variant)
 5. A local LLM (Ollama + Qwen3.5) generates a **dimension-based song prompt** (style, instruments, mood, vocal_style, production)
 6. ACE-Step 1.5 generates a full MP3 with semantic audio codes for melodic structure
@@ -143,7 +144,8 @@ psutil>=6.0.0
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.0.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vite-plugin-pwa": "^1.x"
   }
 }
 ```
@@ -169,7 +171,9 @@ generative-radio/
 │   ├── tsconfig.json
 │   ├── tsconfig.app.json
 │   ├── tsconfig.node.json
-│   ├── vite.config.ts         # Proxy /api→:5555, /ws→ws://:5555, allowedHosts; preview proxy for prod
+│   ├── public/
+│   │   └── icons/             # PWA icons: icon-192.png, icon-512.png, icon-maskable-512.png, apple-touch-icon.png
+│   ├── vite.config.ts         # Proxy /api→:5555, /ws→ws://:5555, allowedHosts; VitePWA plugin; CSP worker-src
 │   └── src/
 │       ├── main.tsx
 │       ├── vite-env.d.ts      # Vite client types (CSS imports, import.meta.env)
@@ -340,7 +344,7 @@ class TrackInfo(BaseModel):
 - "← Back to Player" button (shown only when a track is already playing — allows returning without changing settings)
 - Multi-select mood chips grouped by **3 display categories**: Emotion (20 pills, sorted low→high energy), Atmosphere (20 pills, sorted low→high energy), Instrument — each with a 🎲 Random option
 - Single-select language chips
-- "How are you feeling today?" text input (200 char max)
+- "What are you doing now?" text input (200 char max)
 - "Your name?" text input (50 char max)
 - Collapsible **Advanced Options** with link to ACE-Step tutorial:
   - Time Signature pills (None / 2/4 / 3/4 / 4/4 / 6/8)
@@ -353,7 +357,7 @@ class TrackInfo(BaseModel):
 
 - Song title (Bebas Neue), session info (genre/mood/language), tags, BPM/key/duration
 - **Lyrics display**: scrollable 3-line box below metadata (pre-wrapped, shows LLM-generated lyrics with structure tags)
-- **Mute button**: small orange icon button (matches DJ button style), per-client — no effect on other listeners
+- **Transport controls**: ⏪ −10s / ▶⏸ play-pause / ⏩ +10s — shown whenever a track is loaded, available to all clients
 - Equalizer animation, progress bar
 - Activity log (last 8 progress entries)
 - "More Like This" toggle (controller only) — pins/unpins seed
@@ -363,9 +367,11 @@ class TrackInfo(BaseModel):
 
 ### `useRadio.ts` — Core Hook
 
-Exposes: role, status, currentTrack, nextReady, statusMessage, errorMessage, activityLog, listenerCount, audioBlocked, viewers, lastSeed, moreLikeThis, setMoreLikeThis, **muted**, **toggleMute**, start, stop, rewind, unblockAudio, audioRef, progress.
+Exposes: role, status, currentTrack, nextReady, statusMessage, errorMessage, activityLog, listenerCount, audioBlocked, viewers, lastSeed, moreLikeThis, setMoreLikeThis, **localPaused**, **togglePlayPause**, **seekBackward**, **seekForward**, start, stop, unblockAudio, audioRef, progress.
 
 WebSocket with exponential backoff reconnect (1s → 16s max). Blob pre-fetching for zero-latency transitions. iOS autoplay unlock.
+
+**Media Session API** (`navigator.mediaSession`): track metadata (title = song title, artist = genre) pushed to the OS on every track change — feeds the iOS Dynamic Island, Lock Screen, and Android notification shade. Action handlers registered for play, pause, seekbackward (−10s), and seekforward (+10s).
 
 ---
 
@@ -618,3 +624,50 @@ Components: `[main]`, `[radio]`, `[llm]`, `[acestep]`, `[config]`. Each track ge
 - **Language chips:** Pill buttons, green selection, dashed border for instrumental
 - **Advanced options:** Collapsible section, pill buttons for discrete choices, range slider for inference steps
 - **"More Like This":** Pill toggle button with lock/dice icon, accent highlight when active
+
+---
+
+## 22. Progressive Web App (PWA)
+
+Built with `vite-plugin-pwa` (Workbox). Generates `manifest.webmanifest` and `sw.js` at build time.
+
+### Web App Manifest
+
+| Field | Value |
+|---|---|
+| `name` | Generative Radio |
+| `short_name` | Gen Radio |
+| `display` | standalone |
+| `theme_color` / `background_color` | #0a0a0f |
+| `start_url` | / |
+| `orientation` | any |
+
+### Icons (`frontend/public/icons/`)
+
+| File | Size | Purpose |
+|---|---|---|
+| `icon-192.png` | 192×192 | Android home screen |
+| `icon-512.png` | 512×512 | Android splash / large |
+| `icon-maskable-512.png` | 512×512 | Android adaptive icon (12% safe-zone padding) |
+| `apple-touch-icon.png` | 180×180 | iOS home screen |
+
+### Service Worker Strategy
+
+- `registerType: 'autoUpdate'` — new SW activates immediately via `skipWaiting()`
+- **Precache:** all built JS, CSS, HTML, fonts, and icons — app shell loads instantly
+- **Excluded from SW:** `/api/*` and `/ws` — live backend traffic never intercepted
+- **Runtime cache:** Google Fonts with 1-year TTL (CacheFirst)
+- `navigateFallback: '/index.html'` for SPA deep-link support
+
+### Installation
+
+- **iOS Safari:** Share → "Add to Home Screen" (Chrome on iOS cannot install PWAs — Apple platform restriction)
+- **Android Chrome:** install banner or browser menu → "Install app"
+
+### CSP Update
+
+`worker-src 'self'` added to the Content-Security-Policy header to allow the Workbox service worker to register.
+
+### iOS Lock Screen / Dynamic Island
+
+The **Media Session API** pushes track metadata on every track change: title (`songTitle`), artist (`genre`), album (`"Generative Radio"`), artwork (icon-192 + icon-512). Interactive action handlers: play, pause, seekbackward (−10s), seekforward (+10s).

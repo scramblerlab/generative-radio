@@ -1,6 +1,8 @@
 # Generative Radio
 
-A fully local, offline AI radio web app. Pick a genre, mood, vocal language, and tell it how you feel — the app generates and plays an endless stream of original AI-composed songs with no cloud APIs required.
+A fully local, offline AI radio web app. Pick a genre, mood, vocal language, and describe what you're doing — the app generates and plays an endless stream of original AI-composed songs with no cloud APIs required.
+
+Installable as a **Progressive Web App (PWA)** on iPhone and Android for a native app experience.
 
 ## Requirements
 
@@ -43,11 +45,19 @@ Open **http://localhost:5173** in your browser.
 
 When `cloudflared` is installed, a public URL is printed in the startup banner — share it to access the app from any device.
 
+## Installing as a PWA (mobile)
+
+**iPhone (Safari only):** Open the app URL → Share → "Add to Home Screen". The app opens in standalone mode with no browser bar.
+
+**Android (Chrome):** Open the app URL → Chrome menu → "Install app" (or the install banner appears automatically).
+
+The Lock Screen and Dynamic Island will show the currently playing track title and genre, with interactive play/pause and ±10s seek controls.
+
 ## How it works
 
 1. Select a genre (24 options) and optional mood keywords (40 keywords in 3 display categories)
 2. Choose a vocal language (11 languages) or instrumental mode
-3. Optionally describe how you're feeling in free text
+3. Optionally describe what you're doing now in free text
 4. Optionally tune advanced ACE-Step parameters (time signature, inference steps, model variant)
 5. Click **Start Radio**
 6. A local LLM (Ollama + Qwen3.5) generates a dimension-based song prompt (style, instruments, mood, vocal style, production)

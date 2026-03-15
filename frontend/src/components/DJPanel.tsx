@@ -210,7 +210,7 @@ export function DJPanel({ onSubmit, onClose }: DJPanelProps) {
 
             <section className="selector__section">
               <h2 className="selector__section-title">
-                How are you feeling today? <span className="optional">(optional)</span>
+                What are you doing now? <span className="optional">(optional)</span>
               </h2>
               <div className="feeling-input-wrapper">
                 <input
