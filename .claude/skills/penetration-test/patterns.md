@@ -2,6 +2,7 @@
 
 *Auto-maintained — updated every 30 days by the `/penetration-test` skill via WebSearch.*
 *last_patterns_updated: 2026-03-15*
+*patterns_catalogue_version: 2026*
 
 ---
 
