@@ -30,15 +30,19 @@ Wait for the reply. Treat an empty reply or "1" as option 1.
 
 - **Option 1 (or < 30 days old and user pressed Enter):** announce "Using existing patterns. Proceeding." → skip to Phase 1.
 - **Option 2, or patterns are ≥ 30 days old and user chose to update:** announce "Updating pattern catalogue…" Then:
-  1. Run these WebSearch queries:
-     - `OWASP Top 10 2025 new vulnerability categories`
-     - `OWASP API Security Top 10 2023 attack techniques`
-     - `web application high severity CVE 2025 2026 new attack vectors`
-     - `LLM AI application security vulnerabilities prompt injection 2025`
-  2. Identify new attack classes not already in `patterns.md`.
-  3. Use Edit to add new findings into the relevant sections of `patterns.md`. Do NOT remove existing entries — only add or update.
-  4. Use Edit to update the `last_patterns_updated` date line in `patterns.md` to today's date.
-  5. Announce "Pattern catalogue updated. Proceeding."
+  1. Derive year variables from today's date:
+     - CURRENT_YEAR = current 4-digit year (e.g. 2027)
+     - PREV_YEAR = CURRENT_YEAR − 1
+  2. Run these WebSearch queries (substitute the actual year values):
+     - `OWASP Top 10 CURRENT_YEAR new vulnerability categories site:owasp.org`
+     - `OWASP API Security Top 10 latest attack techniques site:owasp.org`
+     - `web application high severity CVE PREV_YEAR CURRENT_YEAR new attack vectors site:cve.mitre.org OR site:portswigger.net`
+     - `LLM AI application security vulnerabilities CURRENT_YEAR site:owasp.org OR site:portswigger.net`
+     - `new web application attack classes CURRENT_YEAR site:owasp.org OR site:portswigger.net OR site:cve.mitre.org`
+  3. Identify new attack classes not already in `patterns.md`.
+  4. Use Edit to add new findings into the relevant sections of `patterns.md`. Do NOT remove existing entries — only add or update.
+  5. Use Edit to update both the `last_patterns_updated` date line and the `patterns_catalogue_version` year in `patterns.md` to reflect today.
+  6. Announce "Pattern catalogue updated to CURRENT_YEAR. Proceeding."
 
 > **Note:** If `last_patterns_updated` is missing entirely, skip the question and run the update automatically.
 
