@@ -34,11 +34,11 @@ Wait for the reply. Treat an empty reply or "1" as option 1.
      - CURRENT_YEAR = current 4-digit year (e.g. 2027)
      - PREV_YEAR = CURRENT_YEAR − 1
   2. Run these WebSearch queries (substitute the actual year values):
-     - `OWASP Top 10 CURRENT_YEAR new vulnerability categories site:owasp.org`
-     - `OWASP API Security Top 10 latest attack techniques site:owasp.org`
+     - `OWASP Top 10 PREV_YEAR CURRENT_YEAR new vulnerability categories site:owasp.org`
+     - `OWASP API Security Top 10 PREV_YEAR CURRENT_YEAR latest attack techniques site:owasp.org`
      - `web application high severity CVE PREV_YEAR CURRENT_YEAR new attack vectors site:cve.mitre.org OR site:portswigger.net`
-     - `LLM AI application security vulnerabilities CURRENT_YEAR site:owasp.org OR site:portswigger.net`
-     - `new web application attack classes CURRENT_YEAR site:owasp.org OR site:portswigger.net OR site:cve.mitre.org`
+     - `LLM AI application security vulnerabilities PREV_YEAR CURRENT_YEAR site:owasp.org OR site:portswigger.net`
+     - `new web application attack classes PREV_YEAR CURRENT_YEAR site:owasp.org OR site:portswigger.net OR site:cve.mitre.org`
   3. Identify new attack classes not already in `patterns.md`.
   4. Use Edit to add new findings into the relevant sections of `patterns.md`. Do NOT remove existing entries — only add or update.
   5. Use Edit to update both the `last_patterns_updated` date line and the `patterns_catalogue_version` year in `patterns.md` to reflect today.
