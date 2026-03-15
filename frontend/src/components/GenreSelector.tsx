@@ -35,10 +35,11 @@ const DJ_LOCK_MINUTES_MAX = 120;
 
 interface GenreSelectorProps {
   onStart: (genres: string[], keywords: string[], language: string, feeling: string, djName: string, advancedOptions?: AdvancedOptions) => void;
+  onBackToPlayer?: () => void;
   currentTrack: Track | null;
 }
 
-export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
+export function GenreSelector({ onStart, onBackToPlayer, currentTrack }: GenreSelectorProps) {
   const [genres, setGenres] = useState<Genre[]>([]);
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [languages, setLanguages] = useState<Language[]>([]);
@@ -185,6 +186,11 @@ export function GenreSelector({ onStart, currentTrack }: GenreSelectorProps) {
 
   return (
     <div className="selector">
+      {currentTrack && onBackToPlayer && (
+        <button className="selector__back-to-player" onClick={onBackToPlayer}>
+          ← Back to Player
+        </button>
+      )}
       <header className="selector__header">
         <div className="selector__logo">📻</div>
         <h1 className="selector__title">Generative Radio</h1>

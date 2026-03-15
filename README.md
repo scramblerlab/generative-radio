@@ -29,8 +29,14 @@ source ~/.zshrc
 
 ### 3. Start everything
 
+**Development (hot-reload):**
 ```bash
 ./scripts/start.sh
+```
+
+**Production (compiled bundle, no reload):**
+```bash
+./scripts/start_prod.sh
 ```
 
 Open **http://localhost:5173** in your browser.
@@ -39,7 +45,7 @@ When `cloudflared` is installed, a public URL is printed in the startup banner �
 
 ## How it works
 
-1. Select a genre (24 options) and optional mood keywords (29 keywords in 4 categories)
+1. Select a genre (24 options) and optional mood keywords (40 keywords in 3 display categories)
 2. Choose a vocal language (11 languages) or instrumental mode
 3. Optionally describe how you're feeling in free text
 4. Optionally tune advanced ACE-Step parameters (time signature, inference steps, model variant)
@@ -51,9 +57,11 @@ When `cloudflared` is installed, a public URL is printed in the startup banner �
 
 ## Multi-listener mode
 
-Multiple browsers can connect to the same session. The first connection becomes the **controller** — they pick genres, start/stop the radio, pin seeds with "More Like This", and see connected listeners. Everyone else joins as a **viewer** with a read-only player.
+Multiple browsers can connect to the same session. The first **local-network** connection becomes the **controller** — they pick genres, start/stop the radio, pin seeds with "More Like This", and see connected listeners. Everyone else joins as a **viewer** with a read-only player.
 
-If the controller disconnects, the next viewer is automatically promoted.
+Remote visitors connecting via the Cloudflare tunnel always join as viewers regardless of order.
+
+If the controller disconnects, the next **local** viewer is automatically promoted.
 
 ## "More Like This" seed pinning
 
@@ -70,7 +78,7 @@ The controller can configure ACE-Step parameters before starting:
 | Option | Default | Range |
 |---|---|---|
 | Time Signature | Auto | 2/4, 3/4, 4/4, 6/8 |
-| Inference Steps | 8 | 4–16 (more = higher quality, slower) |
+| Inference Steps | 8 | 4–100 (more = higher quality, slower) |
 | DiT Model Variant | turbo | turbo, turbo-shift1, turbo-shift3, turbo-continuous |
 
 See the [ACE-Step 1.5 Tutorial](https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/Tutorial.md) for details on what each parameter does.
@@ -89,7 +97,7 @@ Both modes proxy all traffic including WebSockets. Viewers joining via the tunne
 
 | Service | Port | Description |
 |---|---|---|
-| Frontend | 5173 | React + Vite (dev server, proxies /api and /ws) |
+| Frontend | 5173 | React + Vite (dev HMR server or compiled preview, proxies /api and /ws) |
 | Backend | 5555 | FastAPI (REST + WebSocket) |
 | ACE-Step API | 8001 | Music generation (MLX / Apple Silicon) |
 | Ollama | 11434 | LLM inference |
@@ -136,9 +144,13 @@ ACESTEP_PATH=/path/to/ACE-Step-1.5 ./scripts/start.sh
 cd backend
 uvicorn main:app --port 5555 --log-level debug
 
-# Run frontend
+# Run frontend (dev, hot-reload)
 cd frontend
 npm run dev
+
+# Run frontend (production preview of compiled bundle)
+cd frontend
+npm run build && npm run preview
 ```
 
 ## Stopping

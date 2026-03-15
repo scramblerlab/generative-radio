@@ -1,6 +1,6 @@
 # Generative Radio — Build Specification (v2)
 
-> **Snapshot date:** 2026-02-25
+> **Snapshot date:** 2026-03-15
 > **Supersedes:** `BUILD_SPEC_V1.md` (v1 spec)
 >
 > This document describes the current state of the codebase — architecture, runtime behaviour, protocols, and implementation details — as a single reference for contributors and AI coding assistants.
@@ -160,7 +160,7 @@ generative-radio/
 │   ├── llm.py                 # OllamaClient: 5-dimension prompt generation with feeling injection
 │   ├── acestep_client.py      # ACEStepClient: advanced options, seed, CoT-disabled pipeline
 │   ├── models.py              # Pydantic models: SongPrompt (5 dimensions), TrackInfo, WSMessage
-│   ├── genres.py              # 24 genres, 29 keywords (4 categories), 12 languages
+│   ├── genres.py              # 24 genres, 40 keywords (4 categories), 12 languages
 │   ├── config.py              # Memory detection, model selection, progressive duration, mem_snapshot()
 │   └── requirements.txt
 ├── frontend/
@@ -169,9 +169,10 @@ generative-radio/
 │   ├── tsconfig.json
 │   ├── tsconfig.app.json
 │   ├── tsconfig.node.json
-│   ├── vite.config.ts         # Proxy /api→:5555, /ws→ws://:5555, allowedHosts
+│   ├── vite.config.ts         # Proxy /api→:5555, /ws→ws://:5555, allowedHosts; preview proxy for prod
 │   └── src/
 │       ├── main.tsx
+│       ├── vite-env.d.ts      # Vite client types (CSS imports, import.meta.env)
 │       ├── App.tsx            # Role-aware routing, session info, DJ name, moreLikeThis
 │       ├── App.css            # Full stylesheet: fonts, genre pills, mood groups, advanced options
 │       ├── types.ts           # Track, Genre, Keyword, AdvancedOptions, SessionInfo, seed in TrackReadyData
@@ -183,7 +184,8 @@ generative-radio/
 │           └── useRadio.ts        # WS lifecycle, blob pre-fetch, seed state, moreLikeThis, advancedOptions
 ├── scripts/
 │   ├── setup.sh               # One-time: Homebrew, Ollama, LLM models, ACE-Step, venv, npm install
-│   └── start.sh               # Launch: Ollama, ACE-Step, backend, frontend, cloudflared (named or quick)
+│   ├── start.sh               # Dev launch: Ollama, ACE-Step, backend (--reload), Vite dev server, cloudflared
+│   └── start_prod.sh          # Prod launch: clears cache, npm run build, backend (no --reload), Vite preview
 ├── docs/
 │   ├── acestep-enhanced-inputs-plan.md
 │   ├── acestep-thinking-mode-analysis.md
@@ -282,15 +284,16 @@ class TrackInfo(BaseModel):
 ### `genres.py`
 
 - **24 genres** with icon, label, and 5 subgenres each
-- **29 mood keywords** in 4 categories: Energy (6), Emotion (8), Atmosphere (8), Texture (7)
+- **40 mood keywords** in 4 backend categories: Energy (9), Emotion (11), Atmosphere (11), Texture (9) — the UI merges Energy→Emotion and Texture→Atmosphere, showing 3 groups of 20 each plus Instrument
 - **12 language options** including instrumental
+- Keywords are ordered low → high energy within each display group
 
 ### `llm.py` — OllamaClient
 
-- Generates `SongPrompt` via structured output (`format=SongPrompt.model_json_schema()`)
+- Generates `SongPrompt` via **labeled plain-text output** (`TITLE:`, `STYLE:`, … `LYRICS:`) parsed by `_parse_labeled_text()` — not JSON/structured output
 - `think=False` — Qwen3 chain-of-thought disabled
-- System prompt includes dimension-specific guidance with examples for each of the 5 fields
-- Enriched lyrics rules: 15+ ACE-Step structure tags, combined modifiers, syllable guidance
+- System prompt injects a prominent `CRITICAL REQUIREMENT` block at the top for non-English languages
+- Language validation: `_lyrics_match_language()` checks Unicode script ranges (Hiragana/Katakana for Japanese, Hangul for Korean, etc.); retries once with `language_retry=True` emphasis if wrong language detected
 - Injects `feeling` parameter when non-empty
 - Session history (last 10 titles) to ensure variety
 
@@ -333,19 +336,24 @@ class TrackInfo(BaseModel):
 
 ### `GenreSelector.tsx`
 
-- Single-select genre pills (24 genres, uppercase, no icons)
-- Multi-select mood chips grouped by 4 categories
+- Single-select genre pills (24 genres, uppercase, no icons) + 🎲 Random mode
+- "← Back to Player" button (shown only when a track is already playing — allows returning without changing settings)
+- Multi-select mood chips grouped by **3 display categories**: Emotion (20 pills, sorted low→high energy), Atmosphere (20 pills, sorted low→high energy), Instrument — each with a 🎲 Random option
 - Single-select language chips
 - "How are you feeling today?" text input (200 char max)
 - "Your name?" text input (50 char max)
 - Collapsible **Advanced Options** with link to ACE-Step tutorial:
   - Time Signature pills (None / 2/4 / 3/4 / 4/4 / 6/8)
-  - Inference Steps slider (4–16, default 8 highlighted)
+  - Inference Steps slider (4–100, default 8 highlighted)
   - DiT Model Variant pills (turbo / turbo-shift1 / turbo-shift3 / turbo-continuous)
+  - ACE-Step CoT Flags (Thinking, CoT Caption, CoT Metas, CoT Language)
+  - DJ Cooldown slider (1–120 min, default 30)
 
 ### `RadioPlayer.tsx`
 
 - Song title (Bebas Neue), session info (genre/mood/language), tags, BPM/key/duration
+- **Lyrics display**: scrollable 3-line box below metadata (pre-wrapped, shows LLM-generated lyrics with structure tags)
+- **Mute button**: small orange icon button (matches DJ button style), per-client — no effect on other listeners
 - Equalizer animation, progress bar
 - Activity log (last 8 progress entries)
 - "More Like This" toggle (controller only) — pins/unpins seed
@@ -355,7 +363,7 @@ class TrackInfo(BaseModel):
 
 ### `useRadio.ts` — Core Hook
 
-Exposes: role, status, currentTrack, nextReady, statusMessage, errorMessage, activityLog, listenerCount, audioBlocked, viewers, lastSeed, moreLikeThis, setMoreLikeThis, start, stop, rewind, unblockAudio, audioRef, progress.
+Exposes: role, status, currentTrack, nextReady, statusMessage, errorMessage, activityLog, listenerCount, audioBlocked, viewers, lastSeed, moreLikeThis, setMoreLikeThis, **muted**, **toggleMute**, start, stop, rewind, unblockAudio, audioRef, progress.
 
 WebSocket with exponential backoff reconnect (1s → 16s max). Blob pre-fetching for zero-latency transitions. iOS autoplay unlock.
 
@@ -473,7 +481,7 @@ Controller-configurable per session, passed via WS `start` event:
 | Option | API Param | Default | Values |
 |---|---|---|---|
 | Time Signature | `time_signature` | None (auto) | `"2"`, `"3"`, `"4"`, `"6"` |
-| Inference Steps | `inference_steps` | 8 | 4–16 |
+| Inference Steps | `inference_steps` | 8 | 4–100 |
 | DiT Model Variant | `model` | `turbo` | `turbo`, `turbo-shift1`, `turbo-shift3`, `turbo-continuous` |
 
 Model values are auto-prefixed: `turbo` → `acestep-v15-turbo`.
@@ -495,15 +503,27 @@ Reset conditions: toggle OFF, session stop, new session start, controller discon
 
 ## 17. Launch Scripts
 
-### `start.sh` — 5 services
+### `start.sh` — development (5 services)
 
 1. **Ollama** — `ollama serve` (skipped if running)
 2. **ACE-Step API** — `uv run acestep-api` with MLX (waits up to 60 min on first run)
 3. **FastAPI backend** — `uvicorn main:app` on port 5555 with `--reload`
-4. **Frontend** — `npm run dev` on port 5173
+4. **Frontend** — `npm run dev` on port 5173 (Vite HMR dev server)
 5. **Cloudflare tunnel** — named tunnel (`cloudflared tunnel run`) if `~/.cloudflared/config.yml` exists; otherwise quick tunnel fallback
 
 Shutdown (`Ctrl+C`): kills backend, frontend, tunnel, Ollama. ACE-Step intentionally left running.
+
+### `start_prod.sh` — production (step 0 + 5 services)
+
+Adds a **step 0** before the services:
+- Clears Vite transform cache (`node_modules/.vite`) and previous `dist/`
+- Runs `npm ci` + `npm run build` (TypeScript compile → Vite bundle → `frontend/dist/`)
+
+Then starts services with production settings:
+3. **FastAPI backend** — `uvicorn main:app` on port 5555 **without** `--reload`
+4. **Frontend** — `npm run preview` on port 5173 (serves compiled bundle; proxy config for `/api` and `/ws` defined in `vite.config.ts` `preview` section)
+
+All other steps (Ollama, ACE-Step, tunnel) are identical to `start.sh`.
 
 ---
 

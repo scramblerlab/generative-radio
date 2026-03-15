@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(source:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(git branch -d feat/plain-text-llm-dj-cooldown)",
+      "Bash(ls /Users/nobu/dev/ai/generative-radio/backend/*.py)",
+      "Read(//Users/nobu/dev/ai/ACE-Step-1.5/docs/en/**)",
+      "Read(//Users/nobu/dev/ai/ACE-Step-1.5/acestep/**)",
+      "Bash(npx tsc --noEmit)"
     ]
   }
 }
