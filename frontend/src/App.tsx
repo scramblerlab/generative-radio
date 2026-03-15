@@ -96,14 +96,13 @@ export default function App() {
             onRewind={radio.rewind}
             onBack={handleBack}
             onUnblockAudio={radio.unblockAudio}
-            djLocked={radio.djLocked}
             djUnlockAt={radio.djUnlockAt}
             activeDjName={radio.activeDjName}
             onClaimDj={radio.claimDj}
           />
         ) : (
           view === 'selector' ? (
-            <GenreSelector onStart={handleStart} currentTrack={radio.currentTrack} />
+            <GenreSelector onStart={handleStart} onBackToPlayer={() => setView('player')} currentTrack={radio.currentTrack} />
           ) : (
             <RadioPlayer
               readonly={false}
@@ -127,7 +126,6 @@ export default function App() {
               onRewind={radio.rewind}
               onBack={handleBack}
               onUnblockAudio={radio.unblockAudio}
-              djLocked={radio.djLocked}
               djUnlockAt={radio.djUnlockAt}
               activeDjName={radio.activeDjName}
               onClaimDj={radio.claimDj}

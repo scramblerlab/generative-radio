@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -13,15 +14,15 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-
 from config import OLLAMA_MODEL
 from genres import GENRES, KEYWORDS, LANGUAGES
 from llm import OllamaClient
 from acestep_client import ACEStepClient
-from radio import RadioOrchestrator
+from radio import RadioOrchestrator, _is_local_ip, _normalize_ip
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +61,54 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title="Generative Radio", version="1.0.0", lifespan=lifespan)
 
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Inject HTTP security headers on every response."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-site"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "connect-src 'self' wss: https:; "
+            "font-src 'self' fonts.gstatic.com; "
+            "style-src 'self' 'unsafe-inline' fonts.googleapis.com; "
+            "script-src 'self'; "
+            "img-src 'self' data:; "
+            "frame-ancestors 'none'"
+        )
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+# In dev mode (ALLOW_QUICK_TUNNEL=1) also accept Cloudflare quick-tunnel origins.
+# Never set this in production — start_prod.sh intentionally omits it.
+_quick_tunnel_regex = (
+    r"https://[a-z0-9-]+\.trycloudflare\.com"
+    if os.getenv("ALLOW_QUICK_TUNNEL") == "1"
+    else None
+)
+if os.getenv("ALLOW_QUICK_TUNNEL") == "1":
+    logger.info("[main] CORS: quick-tunnel origins enabled (dev mode)")
+else:
+    logger.info("[main] CORS: quick-tunnel origins disabled (production mode)")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://radio.scrambler-lab.com",
+    ],
+    allow_origin_regex=_quick_tunnel_regex,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -112,6 +157,19 @@ async def get_status():
     }
 
 
+def _resolve_request_ip(request: Request) -> str:
+    """Resolve the real client IP from an HTTP request, honoring Cloudflare headers."""
+    cf_ip = request.headers.get("cf-connecting-ip", "").strip()
+    if cf_ip:
+        return _normalize_ip(cf_ip)
+    forwarded = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return _normalize_ip(first)
+    return _normalize_ip(request.client.host) if request.client else "unknown"
+
+
 def _iter_audio(data: bytes, chunk_size: int = 65_536):
     """Yield audio bytes in chunks so the browser can start decoding immediately."""
     for i in range(0, len(data), chunk_size):
@@ -148,8 +206,15 @@ async def get_audio(track_id: str):
 
 
 @app.post("/api/tracks/{track_id}/save")
-async def save_track(track_id: str):
-    """Save the track's MP3 and a JSON metadata file to the saved_tracks/ directory."""
+async def save_track(track_id: str, request: Request):
+    """Save the track's MP3 and a JSON metadata file to the saved_tracks/ directory.
+
+    Restricted to local-network clients only — remote viewers cannot trigger disk writes.
+    """
+    client_ip = _resolve_request_ip(request)
+    if not _is_local_ip(client_ip):
+        logger.warning(f"[main] Save rejected — remote client {client_ip}")
+        raise HTTPException(status_code=403, detail="Save is only available to local clients")
     logger.info(f"[main] POST /api/tracks/{track_id}/save")
     audio_bytes = radio.audio_cache.get(track_id)
     if not audio_bytes:
@@ -197,7 +262,7 @@ async def save_track(track_id: str):
     json_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False))
 
     logger.info(f"[main] Track saved: {base_name}")
-    return {"mp3": str(mp3_path), "json": str(json_path), "baseName": base_name}
+    return {"baseName": base_name}
 
 
 # ------------------------------------------------------------------ #

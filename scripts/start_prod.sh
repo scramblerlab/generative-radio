@@ -1,6 +1,12 @@
 #!/bin/bash
-# Start all Generative Radio services.
-# Run from the project root: ./scripts/start.sh
+# Start Generative Radio in PRODUCTION mode.
+#
+# Differences from start.sh (dev mode):
+#   - Clears all caches and does a fresh frontend build (npm run build)
+#   - Serves the compiled static bundle via Vite preview (not the dev HMR server)
+#   - Runs the FastAPI backend without --reload
+#
+# Run from the project root: ./scripts/start_prod.sh
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,7 +15,7 @@ ACESTEP_DIR="${ACESTEP_PATH:-$(dirname "$PROJECT_DIR")/ACE-Step-1.5}"
 
 echo ""
 echo "╔══════════════════════════════════════╗"
-echo "║      Generative Radio — Starting     ║"
+echo "║   Generative Radio — Production      ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
@@ -19,6 +25,32 @@ export PYTORCH_ENABLE_MPS_FALLBACK=1
 
 # Ensure uv (installed to ~/.local/bin by astral.sh installer) is on PATH
 export PATH="$HOME/.local/bin:$PATH"
+
+# ── 0. Clean build ─────────────────────────────────────────────────────────
+echo "[0/5] Cleaning caches and building frontend..."
+
+# Clear Vite transform cache
+if [ -d "$PROJECT_DIR/frontend/node_modules/.vite" ]; then
+  echo "  Clearing Vite cache..."
+  rm -rf "$PROJECT_DIR/frontend/node_modules/.vite"
+fi
+
+# Clear previous build output
+if [ -d "$PROJECT_DIR/frontend/dist" ]; then
+  echo "  Clearing previous dist/..."
+  rm -rf "$PROJECT_DIR/frontend/dist"
+fi
+
+# Install/update npm dependencies
+echo "  Installing npm dependencies..."
+cd "$PROJECT_DIR/frontend"
+npm ci --prefer-offline
+
+# Compile production bundle
+echo "  Building frontend (npm run build)..."
+npm run build
+cd "$PROJECT_DIR"
+echo "  Frontend build complete — output: frontend/dist/"
 
 # ── 1. Ollama ──────────────────────────────────────────────────────────────
 OLLAMA_PID=""
@@ -43,7 +75,6 @@ fi
 
 if curl -sf http://localhost:8001/health > /dev/null 2>&1; then
   echo "[2/5] ACE-Step API already running — reusing existing process."
-  # Capture PID so it shows in the shutdown message, but we won't kill it on exit either way
   ACESTEP_PID=$(lsof -ti tcp:8001 2>/dev/null | head -1 || echo "unknown")
 else
   echo "[2/5] Starting ACE-Step 1.5 API server..."
@@ -73,10 +104,19 @@ else
   echo "  ACE-Step API ready (after ${WAIT}s)."
 fi
 
-# ── 3. FastAPI Backend ─────────────────────────────────────────────────────
-echo "[3/5] Starting FastAPI backend..."
+# ── 3. FastAPI Backend (no --reload in production) ─────────────────────────
+echo "[3/5] Starting FastAPI backend (production mode)..."
+echo ""
+echo "  ┌─ CORS allowed origins (production) ──────────────────────────┐"
+echo "  │  http://localhost:5173                                        │"
+echo "  │  http://127.0.0.1:5173                                        │"
+echo "  │  https://radio.scrambler-lab.com                             │"
+echo "  │                                                               │"
+echo "  │  ⚠  Quick-tunnel URLs (*.trycloudflare.com) are BLOCKED.     │"
+echo "  │     Use ./scripts/start.sh for dev with quick-tunnel access. │"
+echo "  └───────────────────────────────────────────────────────────────┘"
+echo ""
 
-# Clear any stale process still holding port 5555 (e.g. from a previous run)
 STALE_BACKEND=$(lsof -ti tcp:5555 2>/dev/null || true)
 if [[ -n "$STALE_BACKEND" ]]; then
   echo "  Clearing stale backend process on port 5555 (PID $STALE_BACKEND)..."
@@ -94,20 +134,18 @@ if [ ! -f "$VENV/bin/uvicorn" ]; then
 fi
 
 cd "$PROJECT_DIR/backend"
-ALLOW_QUICK_TUNNEL=1 "$VENV/bin/uvicorn" main:app \
+"$VENV/bin/uvicorn" main:app \
   --host 127.0.0.1 \
   --port 5555 \
-  --reload \
   --log-level info \
   > /tmp/generative-radio-backend.log 2>&1 &
 BACKEND_PID=$!
 cd "$PROJECT_DIR"
 echo "  Backend PID: $BACKEND_PID  (log: /tmp/generative-radio-backend.log)"
 
-# ── 4. Frontend Dev Server ─────────────────────────────────────────────────
-echo "[4/5] Starting frontend dev server..."
+# ── 4. Vite Preview Server (serves compiled bundle) ────────────────────────
+echo "[4/5] Starting Vite preview server (compiled bundle)..."
 
-# Clear any stale process still holding port 5173
 STALE_FRONTEND=$(lsof -ti tcp:5173 2>/dev/null || true)
 if [[ -n "$STALE_FRONTEND" ]]; then
   echo "  Clearing stale frontend process on port 5173 (PID $STALE_FRONTEND)..."
@@ -116,25 +154,22 @@ if [[ -n "$STALE_FRONTEND" ]]; then
 fi
 
 cd "$PROJECT_DIR/frontend"
-npm run dev > /tmp/generative-radio-frontend.log 2>&1 &
+npm run preview > /tmp/generative-radio-frontend.log 2>&1 &
 FRONTEND_PID=$!
 cd "$PROJECT_DIR"
-echo "  Frontend PID: $FRONTEND_PID  (log: /tmp/generative-radio-frontend.log)"
+echo "  Preview PID: $FRONTEND_PID  (log: /tmp/generative-radio-frontend.log)"
 
 # ── 5. Cloudflare Tunnel ────────────────────────────────────────────────────
 echo "[5/5] Starting Cloudflare tunnel..."
 CLOUDFLARED_PID=""
 TUNNEL_URL=""
 
-# Named tunnel name — must match `cloudflared tunnel create <NAME>` from one-time setup.
-# Override via TUNNEL_NAME env var if your tunnel has a different name.
 CF_TUNNEL_NAME="${TUNNEL_NAME:-generative-radio}"
 CF_TUNNEL_DOMAIN="${TUNNEL_DOMAIN:-radio.scrambler-lab.com}"
 
 if ! command -v cloudflared &>/dev/null; then
   echo "  cloudflared not found — skipping tunnel. Run ./scripts/setup.sh to install."
 elif [ -f "$HOME/.cloudflared/config.yml" ]; then
-  # Named tunnel — permanent fixed domain (see docs/cloudflare-named-tunnel-setup.md)
   echo "  Named tunnel config found — starting tunnel '$CF_TUNNEL_NAME'..."
   cloudflared tunnel run "$CF_TUNNEL_NAME" \
     > /tmp/generative-radio-cloudflared.log 2>&1 &
@@ -143,7 +178,6 @@ elif [ -f "$HOME/.cloudflared/config.yml" ]; then
   echo "  Cloudflared PID: $CLOUDFLARED_PID  (log: /tmp/generative-radio-cloudflared.log)"
   echo "  Fixed URL: $TUNNEL_URL"
 else
-  # Quick tunnel fallback — random URL (for dev machines without named tunnel setup)
   echo "  No named tunnel config — falling back to quick tunnel (random URL)..."
   cloudflared tunnel --url http://localhost:5173 \
     > /tmp/generative-radio-cloudflared.log 2>&1 &
@@ -167,7 +201,7 @@ fi
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"
-echo "║       Generative Radio is live!              ║"
+echo "║    Generative Radio is live! (PRODUCTION)    ║"
 echo "╠══════════════════════════════════════════════╣"
 echo "║  Local:      http://localhost:5173           ║"
 echo "║  Remote:     $TUNNEL_URL"
@@ -185,10 +219,6 @@ echo ""
 echo "Press Ctrl+C to stop all services."
 echo ""
 
-# Shutdown hook — stop the app (backend + frontend + tunnel + optionally Ollama),
-# but intentionally leave ACE-Step running. ACE-Step takes minutes to warm
-# up and may be mid-generation; killing it here costs you the next restart.
-# To stop ACE-Step manually: kill <PID shown above>
 cleanup() {
   echo ""
   echo "Shutting down backend, frontend, and tunnel..."

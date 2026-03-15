@@ -71,6 +71,15 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   gap: 32px;
 }
 
+.selector__back-to-player {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 4px 0;
+  transition: color 0.15s;
+  text-align: left;
+}
+.selector__back-to-player:hover { color: var(--text); }
+
 .selector__header {
   text-align: center;
   display: flex;
