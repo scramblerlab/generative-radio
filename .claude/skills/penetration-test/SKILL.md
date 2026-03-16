@@ -8,10 +8,12 @@ argument-hint: <target-url>
 
 **Target:** $ARGUMENTS
 
-The attack test patterns live in a separate file. Read it now before proceeding:
-`.claude/skills/penetration-test/patterns.md` (project-local install)
-`~/.claude/skills/penetration-test/patterns.md` (global install)
-Try both paths and use whichever exists.
+The attack test patterns live in two files. Read both now before proceeding:
+- `.claude/skills/penetration-test/patterns.md` (sections 1–14, project-local)
+- `.claude/skills/penetration-test/patterns-advanced.md` (sections 15–21, project-local)
+
+For a global install, substitute `~/.claude/skills/penetration-test/` for the path prefix.
+Try both path prefixes and use whichever exists.
 
 ---
 
@@ -40,8 +42,8 @@ Wait for the reply. Treat an empty reply or "1" as option 1.
      - `LLM AI application security vulnerabilities PREV_YEAR CURRENT_YEAR site:owasp.org OR site:portswigger.net`
      - `new web application attack classes PREV_YEAR CURRENT_YEAR site:owasp.org OR site:portswigger.net OR site:cve.mitre.org`
   3. Identify new attack classes not already in `patterns.md`.
-  4. Use Edit to add new findings into the relevant sections of `patterns.md`. Do NOT remove existing entries — only add or update.
-  5. Use Edit to update both the `last_patterns_updated` date line and the `patterns_catalogue_version` year in `patterns.md` to reflect today.
+  4. Use Edit to add new findings into the relevant sections of `patterns.md` or `patterns-advanced.md`. Do NOT remove existing entries — only add or update.
+  5. Use Edit to update the `last_patterns_updated` date line and the `patterns_catalogue_version` year in both `patterns.md` and `patterns-advanced.md` to reflect today.
   6. Announce "Pattern catalogue updated to CURRENT_YEAR. Proceeding."
 
 > **Note:** If `last_patterns_updated` is missing entirely, skip the question and run the update automatically.
@@ -107,7 +109,7 @@ Identify API style: REST, GraphQL, WebSocket.
 
 ## Phase 4 — Vulnerability Testing
 
-Using the patterns loaded from `patterns.md`, run all applicable sections. Skip sections with no relevant surface (e.g. no GraphQL endpoint → skip Section 8). For each test:
+Using the patterns loaded from `patterns.md` and `patterns-advanced.md`, run all applicable sections. Skip sections with no relevant surface (e.g. no GraphQL endpoint → skip Section 8). For each test:
 - Run the command
 - Record HTTP status + first 300 chars of response body
 - Classify: 🔴 CRITICAL / 🟠 HIGH / 🟡 MEDIUM / 🔵 LOW / ✅ Not vulnerable
