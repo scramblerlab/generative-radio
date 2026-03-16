@@ -63,7 +63,6 @@ interface RadioPlayerProps {
   activityLog: ActivityEntry[];
   progress: number; // 0–1
   listenerCount: number;
-  audioBlocked: boolean;
   audioDuration?: number | null;
   viewers?: ViewerInfo[];
   sessionInfo?: SessionInfo | null;
@@ -74,7 +73,6 @@ interface RadioPlayerProps {
   onSeekForward?: () => void;
   onSaveTrack?: () => Promise<void>;
   onBack: () => void;
-  onUnblockAudio: () => void;
   // DJ mode
   djUnlockAt: number;
   activeDjName?: string;
@@ -101,7 +99,6 @@ export function RadioPlayer({
   activityLog,
   progress,
   listenerCount,
-  audioBlocked,
   audioDuration,
   viewers = [],
   sessionInfo,
@@ -112,7 +109,6 @@ export function RadioPlayer({
   onSeekForward,
   onSaveTrack,
   onBack,
-  onUnblockAudio,
   djUnlockAt,
   activeDjName,
   onClaimDj,
@@ -196,17 +192,9 @@ export function RadioPlayer({
 
         {/* Now Playing */}
         <div className="player__now-playing">
-          <Equalizer active={isPlaying && !audioBlocked} />
+          <Equalizer active={isPlaying} />
 
-          {/* Viewer tap-to-listen gate — shown when browser blocked autoplay */}
-          {readonly && audioBlocked && track ? (
-            <button className="player__unblock-btn" onClick={onUnblockAudio}>
-              <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22" aria-hidden="true">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-              Tap to Listen
-            </button>
-          ) : track ? (
+          {track ? (
             <div className="player__track-info">
               <h2 className="player__song-title">{track.songTitle}</h2>
               {sessionInfo && (sessionInfo.keywords.length > 0 || sessionInfo.language) && (
