@@ -81,7 +81,6 @@ export default function App() {
             activityLog={radio.activityLog}
             progress={radio.progress}
             listenerCount={radio.listenerCount}
-            audioBlocked={radio.audioBlocked}
             audioDuration={radio.audioDuration}
             sessionInfo={sessionInfo}
             djName={djName}
@@ -90,7 +89,6 @@ export default function App() {
             onSeekBackward={radio.seekBackward}
             onSeekForward={radio.seekForward}
             onBack={handleBack}
-            onUnblockAudio={radio.unblockAudio}
             djUnlockAt={radio.djUnlockAt}
             activeDjName={radio.activeDjName}
             onClaimDj={radio.claimDj}
@@ -109,7 +107,6 @@ export default function App() {
               activityLog={radio.activityLog}
               progress={radio.progress}
               listenerCount={radio.listenerCount}
-              audioBlocked={radio.audioBlocked}
               audioDuration={radio.audioDuration}
               viewers={radio.viewers}
               sessionInfo={sessionInfo}
@@ -120,7 +117,6 @@ export default function App() {
               onSeekForward={radio.seekForward}
               onSaveTrack={radio.currentTrack ? () => radio.saveTrack(radio.currentTrack!.id) : undefined}
               onBack={handleBack}
-              onUnblockAudio={radio.unblockAudio}
               djUnlockAt={radio.djUnlockAt}
               activeDjName={radio.activeDjName}
               onClaimDj={radio.claimDj}

@@ -27,14 +27,12 @@ export interface UseRadioReturn {
   errorMessage: string | null;
   activityLog: ActivityEntry[];
   listenerCount: number;
-  audioBlocked: boolean;
   viewers: ViewerInfo[];
   audioDuration: number | null; // Actual decoded audio duration (seconds); null until loaded
   saveTrack: (trackId: string) => Promise<void>;
   start: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => Promise<void>;
   stop: () => Promise<void>;
   updateSettings: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => void;
-  unblockAudio: () => void;
   audioRef: RefObject<HTMLAudioElement | null>;
   progress: number; // 0–1
   localPaused: boolean; // True when user has locally paused playback (audio.pause())
@@ -65,7 +63,6 @@ export function useRadio(): UseRadioReturn {
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [progress, setProgress] = useState(0);
   const [listenerCount, setListenerCount] = useState(0);
-  const [audioBlocked, setAudioBlocked] = useState(false);
   const [viewers, setViewers] = useState<ViewerInfo[]>([]);
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const [localPaused, setLocalPaused] = useState(false);
@@ -180,45 +177,45 @@ export function useRadio(): UseRadioReturn {
     setAudioDuration(null);
     setErrorMessage(null);
 
-    // Revoke the previously active blob URL — the old track is no longer needed.
-    clearActiveBlob();
-
     const audio = audioRef.current;
     if (audio) {
-      const blobUrl = preloadBlobUrlRef.current;
+      audio.pause();
 
+      // Capture the old blob URL BEFORE overwriting the ref.
+      // We revoke it AFTER switching audio.src — if we revoke first, the element
+      // still points to the old (now-invalid) blob and can enter an error state
+      // that persists through the src change, causing audio.play() to fail.
+      const prevBlobUrl = activeBlobUrlRef.current;
+      activeBlobUrlRef.current = null;
+
+      const blobUrl = preloadBlobUrlRef.current;
       if (blobUrl) {
-        // Pre-fetch completed — play from the in-memory blob URL instantly.
         console.log('[Audio] ✓ Using pre-fetched blob URL — zero network wait for:', track.songTitle);
         audio.src = blobUrl;
-        activeBlobUrlRef.current = blobUrl;  // Track for later revocation
+        activeBlobUrlRef.current = blobUrl;
         preloadBlobUrlRef.current = null;
       } else {
-        // No pre-fetch available — fall back to direct backend URL.
-        // This happens for the first track and on buffering-recovery paths.
         console.warn('[Audio] ✗ No pre-fetched blob — fetching directly from backend:', track.songTitle);
         audio.src = track.audioUrl;
-        activeBlobUrlRef.current = null;
       }
+
+      // Revoke now — audio.src already points to the new source, so no error state.
+      if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
+
+      // Explicit load resets readyState and clears any lingering error, then starts
+      // loading the new src. Called before play() so there is no pending Promise to abort.
+      audio.load();
 
       if (!keepPaused) {
         audio.play()
-          .then(() => setAudioBlocked(false))
           .catch((err) => {
             console.error('[Audio] play() failed:', err.name, err.message);
-            // Browsers block autoplay when there has been no prior user gesture.
-            // Surface a "Tap to Listen" button so the viewer can unlock audio manually.
-            if (err instanceof DOMException && err.name === 'NotAllowedError') {
-              console.log('[Audio] Autoplay blocked — user gesture required');
-              setAudioBlocked(true);
-            }
-            // AbortError / NotSupportedError are now logged above (not silently dropped)
           });
       } else {
         console.log('[Audio] Track loaded but kept paused (watchdog transition while paused)');
       }
     }
-  }, [clearActiveBlob]);
+  }, []);
 
   /**
    * Pre-fetch the next track's audio bytes and store as a blob URL.
@@ -315,11 +312,25 @@ export function useRadio(): UseRadioReturn {
           // Server says: play this track now (first track or buffering-recovery path).
           // Clear nextTrackRef — the buffering path sends isNext=true then isNext=false
           // for the same track; without this clear, handleTrackEnded would replay it.
-          console.log('[Radio] track_ready (current) — playing:', track.songTitle);
+          console.log('[Radio] track_ready (current) —', track.songTitle);
           nextTrackRef.current = null;
           setNextReady(false);
           setStatus('playing');
-          playTrack(track);
+
+          // On WS reconnect the server snapshot re-sends the current track as isNext=false.
+          // If we're already playing that exact track with no error, don't restart —
+          // it would pause the audio, revoke the blob URL, and re-fetch unnecessarily.
+          const audioEl = audioRef.current;
+          const alreadyPlaying =
+            currentTrackRef.current?.id === track.id &&
+            audioEl != null &&
+            !audioEl.error &&
+            !audioEl.paused;
+          if (alreadyPlaying) {
+            console.log('[Radio] track_ready (current) — same track already playing, skipping restart');
+          } else {
+            playTrack(track);
+          }
         } else {
           // Server says: this is the next track — start pre-fetching its audio bytes
           // immediately so they're ready in memory before the current track ends.
@@ -423,11 +434,15 @@ export function useRadio(): UseRadioReturn {
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     navigator.mediaSession.setActionHandler('play', () => {
-      audioRef.current?.play().catch(() => {});
+      audioRef.current?.play().catch((err) => console.error('[Audio] mediaSession play() failed:', err.name));
+      setLocalPaused(false);
+      localPausedRef.current = false;
       navigator.mediaSession.playbackState = 'playing';
     });
     navigator.mediaSession.setActionHandler('pause', () => {
       audioRef.current?.pause();
+      setLocalPaused(true);
+      localPausedRef.current = true;
       navigator.mediaSession.playbackState = 'paused';
     });
     navigator.mediaSession.setActionHandler('seekbackward', () => {
@@ -443,6 +458,30 @@ export function useRadio(): UseRadioReturn {
       navigator.mediaSession.setActionHandler('seekforward', null);
     };
   // audioRef is stable; register once at mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Retry audio.play() when the page becomes visible (e.g. user opens iOS PWA from background).
+  // The watchdog may have called playTrack() while the app was backgrounded — audio.play()
+  // fails there (no user gesture). Coming to the foreground is a transient user activation on
+  // iOS 16.4+, so retrying here resumes audio automatically without requiring a tap.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      const audio = audioRef.current;
+      if (!audio || !audio.src) return;
+      if (!localPausedRef.current && audio.paused) {
+        console.log('[Audio] visibilitychange → page visible, retrying audio.play()');
+        if (audio.error) audio.load();
+        audio.play()
+          .catch((err) => {
+            console.error('[Audio] visibilitychange play() failed:', err.name);
+          });
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  // Reads from refs (stable) and setAudioBlocked (stable setter) only
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -510,17 +549,6 @@ export function useRadio(): UseRadioReturn {
     sendWS({ event: 'stop' });
   }, [clearPreloadBlob, clearActiveBlob, sendWS]);
 
-  const unblockAudio = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    // Called from a button click, so we are inside a user gesture — play() is allowed.
-    console.log('[Audio] User tapped to listen — resuming from beginning');
-    audio.currentTime = 0;
-    audio.play()
-      .then(() => setAudioBlocked(false))
-      .catch((err) => console.error('[Audio] unblockAudio play() failed:', err));
-  }, []);
-
   const saveTrack = useCallback(async (trackId: string): Promise<void> => {
     const res = await fetch(`/api/tracks/${trackId}/save`, { method: 'POST' });
     if (!res.ok) {
@@ -549,7 +577,11 @@ export function useRadio(): UseRadioReturn {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
-      audio.play().catch(() => {});
+      if (audio.error) {
+        console.warn('[Audio] togglePlayPause — audio in error state, reloading src');
+        audio.load();
+      }
+      audio.play().catch((err) => console.error('[Audio] togglePlayPause play() failed:', err.name));
       setLocalPaused(false);
       localPausedRef.current = false;
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -582,14 +614,12 @@ export function useRadio(): UseRadioReturn {
     errorMessage,
     activityLog,
     listenerCount,
-    audioBlocked,
     viewers,
     audioDuration,
     saveTrack,
     start,
     stop,
     updateSettings,
-    unblockAudio,
     audioRef,
     progress,
     localPaused,
