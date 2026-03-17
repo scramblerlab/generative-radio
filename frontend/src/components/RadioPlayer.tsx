@@ -181,11 +181,11 @@ export function RadioPlayer({
 
       <div className="player__card">
         {/* Single badge: shows controller prefix for host, genre info for all */}
-        {track?.genre && (
+        {track && (track.genre || !readonly) && (
           <div className="player__controller-badge">
             {!readonly && `CONTROLLER :: `}
             {track.isRandom
-              ? `RANDOM · ${track.genre.toUpperCase()}`
+              ? track.genre ? `RANDOM · ${track.genre.toUpperCase()}` : 'RANDOM'
               : track.genre.toUpperCase()}
           </div>
         )}

@@ -65,7 +65,7 @@ export function useRadio(): UseRadioReturn {
   const [listenerCount, setListenerCount] = useState(0);
   const [viewers, setViewers] = useState<ViewerInfo[]>([]);
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
-  const [localPaused, setLocalPaused] = useState(false);
+  const [localPaused, setLocalPaused] = useState(true);
   const activityIdRef = useRef(0);
 
   // DJ mode state
@@ -75,12 +75,13 @@ export function useRadio(): UseRadioReturn {
   const [djPanelOpen, setDjPanelOpen] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const roleRef = useRef<ClientRole | null>(null);          // Ref mirror of role (stale-closure safe for WS callbacks)
   const wsRef = useRef<WebSocket | null>(null);
   const nextTrackRef = useRef<Track | null>(null);        // Pre-buffered next track metadata
   const preloadBlobUrlRef = useRef<string | null>(null);  // In-memory blob URL for the next track
   const activeBlobUrlRef = useRef<string | null>(null);   // Blob URL currently being played (revoke on next transition)
   const currentTrackRef = useRef<Track | null>(null);     // Ref mirror of currentTrack (stale-closure safe for WS callbacks)
-  const localPausedRef = useRef<boolean>(false);          // Ref mirror of localPaused (stale-closure safe)
+  const localPausedRef = useRef<boolean>(true);           // Ref mirror of localPaused (stale-closure safe)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelay = useRef(RECONNECT_BASE_MS);
   const isActiveRef = useRef(false);                      // True while radio should maintain WS
@@ -210,6 +211,13 @@ export function useRadio(): UseRadioReturn {
         audio.play()
           .catch((err) => {
             console.error('[Audio] play() failed:', err.name, err.message);
+            if (err.name === 'NotAllowedError') {
+              // Browser blocked autoplay — no prior user gesture (e.g. viewer on first open).
+              // Show PLAY button so the user can tap to start manually.
+              setLocalPaused(true);
+              localPausedRef.current = true;
+              if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+            }
           });
       } else {
         console.log('[Audio] Track loaded but kept paused (watchdog transition while paused)');
@@ -304,6 +312,7 @@ export function useRadio(): UseRadioReturn {
       if (msg.event === 'role_assigned') {
         const { role: assignedRole } = msg.data as unknown as RoleAssignedData;
         console.log('[Radio] Role assigned:', assignedRole);
+        roleRef.current = assignedRole;
         setRole(assignedRole);
       } else if (msg.event === 'track_ready') {
         const { track, isNext } = msg.data as unknown as TrackReadyData;
@@ -316,6 +325,16 @@ export function useRadio(): UseRadioReturn {
           nextTrackRef.current = null;
           setNextReady(false);
           setStatus('playing');
+
+          // Viewer receiving their very first track: browser blocks autoplay (no prior
+          // user gesture). Force localPaused=true so PLAY button is shown and play() is
+          // not attempted. After the viewer taps Play, localPausedRef becomes false and
+          // all subsequent track transitions auto-play normally.
+          if (roleRef.current === 'viewer' && currentTrackRef.current === null) {
+            console.log('[Radio] First track for viewer — forcing paused state, waiting for user gesture');
+            setLocalPaused(true);
+            localPausedRef.current = true;
+          }
 
           // On WS reconnect the server snapshot re-sends the current track as isNext=false.
           // If we're already playing that exact track with no error, don't restart —
@@ -514,6 +533,11 @@ export function useRadio(): UseRadioReturn {
       audioEl.load();
       console.log('[Audio] iOS unlock: silent play/pause fired');
     }
+
+    // Controller started from a button click — clear the paused flag so tracks auto-play.
+    // Viewers never call start(), so their localPausedRef stays true until they tap Play.
+    setLocalPaused(false);
+    localPausedRef.current = false;
 
     // Send start command over WebSocket. The server validates that this client
     // is the controller and responds via broadcast events (status, track_ready, error).

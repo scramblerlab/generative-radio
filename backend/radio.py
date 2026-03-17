@@ -497,6 +497,8 @@ class RadioOrchestrator:
                         "track": {
                             "id": ct.id,
                             "songTitle": ct.song_title,
+                            "genre": ct.genre,
+                            "isRandom": ct.is_random,
                             "tags": ct.tags,
                             "lyrics": ct.lyrics,
                             "bpm": ct.bpm,
