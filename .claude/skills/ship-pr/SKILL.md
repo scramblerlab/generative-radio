@@ -41,7 +41,7 @@ Otherwise derive BRANCH from the commits:
 - Look at the first/most descriptive commit message
 - Use conventional prefix if obvious: `feat/`, `fix/`, `docs/`, `refactor/`, `chore/`
 - Slugify to max 40 chars
-- Show the proposed branch name and ask the user to confirm or rename
+- Use this name automatically — do not ask for confirmation
 
 ---
 
