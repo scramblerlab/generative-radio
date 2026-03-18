@@ -115,4 +115,6 @@ Report: "Done. `main` is now at $(git log -1 --oneline)."
 
 ## Step 8 — Compact context
 
-Run `/compact` to compress the conversation history and free up context window.
+Tell the user:
+
+> "All done! Run `/compact` to compress the conversation history and free up the context window."
