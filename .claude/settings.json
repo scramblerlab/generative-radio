@@ -7,7 +7,26 @@
       "Bash(ls /Users/nobu/dev/ai/generative-radio/backend/*.py)",
       "Read(//Users/nobu/dev/ai/ACE-Step-1.5/docs/en/**)",
       "Read(//Users/nobu/dev/ai/ACE-Step-1.5/acestep/**)",
-      "Bash(npx tsc --noEmit)"
+      "Bash(npx tsc --noEmit)",
+      "Bash(find ~/.claude -type d -name *penetrat*)",
+      "Bash(find ~/.claude -name *penetrat* -o -name *test* -o -name *pattern*)",
+      "Bash(find /Users/nobu/dev -name *penetrat* -o -name patterns.md)",
+      "Bash(curl -sI https://peaks-hakuba.com)",
+      "Bash(curl -sL https://peaks-hakuba.com/password)",
+      "Bash(TARGET=\"https://peaks-hakuba.com\")",
+      "Bash(for path:*)",
+      "Bash(do)",
+      "Bash(echo -n \"$path: \")",
+      "Bash(curl -so /dev/null -w \"%{http_code}\" \"$TARGET$path\" -L --max-time 5)",
+      "Bash(done)",
+      "Bash(/usr/bin/curl -so /dev/null -w \"%{http_code}\" \"$TARGET$path\" -L --max-time 5)",
+      "Bash(TARGET=\"https://peaks-hakuba.com\" echo \"=== /.env ===\" /usr/bin/curl -sL \"$TARGET/.env\" --max-time 5)",
+      "Read(//usr/bin/**)",
+      "Bash(TARGET=\"https://peaks-hakuba.com\" echo \"=== /robots.txt \\(full\\) ===\" /usr/bin/curl -sL \"$TARGET/robots.txt\" --max-time 5 __NEW_LINE_0515d31c916ed139__ echo -e \"\\\\n=== /sitemap.xml check ===\" /usr/bin/curl -sI \"$TARGET/sitemap.xml\" --max-time 5)",
+      "Bash(__NEW_LINE_6d9962a129f7b143__ git:*)",
+      "Bash(gh auth:*)",
+      "Bash(git branch:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
