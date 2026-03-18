@@ -1,4 +1,4 @@
-# Multi-Listener: Controller / Viewer Design
+# Multi-Listener: Controller / Viewer Model
 
 ## Overview
 
@@ -7,14 +7,17 @@ holds the **controller** role at a time; every other connection is a **viewer**.
 
 | Role | UI shown | Controls |
 |---|---|---|
-| Controller | GenreSelector **or** RadioPlayer (full) | Genre pick, Start, Stop, Rewind, "Change genres" |
-| Viewer | RadioPlayer (read-only) | None — observes only |
+| Controller | GenreSelector **or** RadioPlayer (full) | Genre pick, Start, Stop, Skip, Save track, ⏪ ▶⏸ ⏩ seek |
+| Viewer | RadioPlayer (read-only) | ⏪ ▶⏸ ⏩ seek, Be the DJ button |
+
+Both roles see the same track info, progress bar, equalizer, activity log, and listener count.
 
 ---
 
 ## Role Assignment
 
 ### Local-network connections only → controller eligible
+
 Only connections whose resolved IP is a **private or loopback address** can be
 assigned the controller role:
 
@@ -31,28 +34,26 @@ The server resolves the real client IP by checking headers in order:
 2. `X-Forwarded-For` — standard reverse-proxy header (first entry)
 3. `ws.client.host` — raw socket peer (correct for direct LAN connections)
 
-This means remote visitors who open the Cloudflare tunnel URL are **always
-assigned the viewer role**, even if no controller is currently connected.
+Remote visitors opening the Cloudflare tunnel URL are **always viewers**, even if no controller is connected.
 
 ### First local connection (when no controller exists) → controller
-When the very first local WebSocket connects and no controller is active,
-it is immediately assigned the controller role.  The server unicasts
-`role_assigned: controller` to that connection.
+
+When the first local WebSocket connects and no controller is active, it is immediately assigned the controller role. The server unicasts `role_assigned: controller` to that connection.
 
 ### All other connections → viewer
-Any WebSocket that connects while a controller already exists, or any remote
-connection, receives `role_assigned: viewer`. Viewers never see the GenreSelector.
+
+Any WebSocket that connects while a controller already exists, or any remote connection, receives `role_assigned: viewer`.
 
 ### Late-join state sync
-When a viewer connects while a session is active, the server immediately
-unicasts a snapshot to that one connection so they don't have to wait for
-the next broadcast cycle:
-1. `role_assigned: viewer`
+
+When any client connects while a session is active, the server immediately unicasts a snapshot:
+
+1. `role_assigned` — their role
 2. `track_ready` (isNext: false) — if a track is currently playing
 3. `status` — current state + message
+4. `dj_state` — current DJ lock state and active DJ name
 
-If no session is running (state IDLE/STOPPED), the viewer sees a
-"Waiting for host…" overlay on the player view.
+The controller also receives `viewer_list` (IPs + connected-since timestamps) whenever the viewer list changes.
 
 ---
 
@@ -62,20 +63,21 @@ If no session is running (state IDLE/STOPPED), the viewer sees a
 connect
   └─► role_assigned: controller
         ├─► GenreSelector shown
-        │     └─► picks genres, hits "Start Radio"
-        │               └─► sends WS { event: "start", data: {...} }
+        │     └─► picks genres + mood + language + feeling + advanced options
+        │               └─► "Start Radio" → WS { event: "start", data: {...} }
         │                       └─► RadioPlayer shown (full controls)
-        │                             ├─ Rewind button
-        │                             ├─ Stop/Play button
-        │                             └─ "Change genres" back button
-        │                                   └─► sends WS { event: "stop" }
-        │                                           └─► back to GenreSelector
+        │                             ├─ ⏪ −10s / ▶⏸ play-pause / ⏩ +10s
+        │                             ├─ Skip button
+        │                             ├─ Save track button
+        │                             └─ "← Back" button (returns to GenreSelector
+        │                                  without stopping — current track keeps playing)
+        │                                       └─► sends WS { event: "reschedule", data: {...} }
+        │                                               on new Start from selector
         └─► (disconnect)
               └─► promotion logic (see below)
 ```
 
-The **"Change genres" back button is only rendered when `role === 'controller'`**.
-Viewers never see it.
+The **"← Back" button is only rendered when `role === 'controller'`**. Navigating back does not stop the radio — the controller can change genres mid-session and the new settings take effect from the next generated track.
 
 ---
 
@@ -85,144 +87,94 @@ Viewers never see it.
 connect
   └─► role_assigned: viewer
         └─► RadioPlayer shown (read-only)
-              ├─ Track info, progress bar, equalizer  [same as controller]
-              ├─ "Listening" badge (replaces back button)
+              ├─ Track info, progress bar, equalizer   [same as controller]
+              ├─ ⏪ −10s / ▶⏸ play-pause / ⏩ +10s   [local playback controls]
               ├─ Activity log (visible during generating/buffering)
               ├─ StatusBar with listener count          [same as controller]
-              └─ Controls: disabled / hidden
+              ├─ "Be the DJ" button (when DJ slot unlocked)
+              └─ "PRESENTED BY [DJ NAME]" footer (when a DJ is active)
 ```
 
-If the session is not yet started (state IDLE or STOPPED), the read-only player
-shows "Waiting for host to start the radio…" in place of track info.
+On first load, viewers are forced into a paused state (browser autoplay policy requires a prior user gesture). A **Play** button is shown until the viewer taps it.
+
+If the session is not yet started (state IDLE or STOPPED), the read-only player shows "Waiting for host to start the radio…".
 
 ---
 
 ## Controller Promotion
 
-When the controller disconnects, the next **local** viewer in connection order is
-promoted.  Remote viewers are never promoted.
+When the controller disconnects, the next **local** viewer in connection order is promoted. Remote viewers are never promoted.
 
 **Promotion timing:**
 
 | Server state when controller drops | When promotion happens |
 |---|---|
-| IDLE / STOPPED / PLAYING (no prebuffer task) | Immediately on disconnect |
-| GENERATING / BUFFERING (prebuffer task running) | Deferred — after current generation finishes |
+| IDLE / STOPPED / PLAYING (no active generation) | Immediately on disconnect |
+| GENERATING / BUFFERING (generation task running) | Deferred — after current generation finishes |
 
 **After promotion:**
 - Server unicasts `role_assigned: controller` to the promoted client
-- Promoted client was already showing RadioPlayer → button and controls appear
-- If a track is currently playing, they see it in full-control mode
-- They can hit "Change genres" to stop the session and pick new genres
-- Other remaining viewers receive no change (they keep watching the track)
+- Promoted client was already showing RadioPlayer → full controls appear (save, skip, back button)
+- Other remaining viewers receive no change
 
 **If no local viewers remain when the controller disconnects:**
 - `_controller_ws` is set to `None`
-- Next **local** client to connect becomes the controller (fresh assignment)
+- Generation continues if already underway
+- Next **local** client to connect becomes the controller
 - Remote viewers continue watching but cannot take the controller role
 
 ---
 
-## WebSocket Protocol Changes
+## DJ Mode
 
-### New client → server events
+Viewers can request the DJ slot when the cooldown has expired. This lets anyone on the session influence what plays next without needing controller access.
 
-These replace the current REST calls for `start`, `stop`, and `skip`.
-The server checks whether the sending WebSocket is the controller before
-executing; non-controllers receive an `error` event back.
-
-```json
-{ "event": "start",  "data": { "genres": [...], "keywords": [...], "language": "en" } }
-{ "event": "stop" }
-{ "event": "skip" }
+```
+viewer clicks "Be the DJ"
+  └─► WS { event: "dj_claim" }
+        └─► dj_claim_ack { granted: true }  → DJPanel modal opens
+              └─► viewer fills name + genre + mood + language + feeling
+                    └─► WS { event: "dj_submit", data: { djName, genres, keywords, ... } }
+                          └─► backend reschedules next track with DJ's settings
+                                sets cooldown, broadcasts dj_state to all clients
 ```
 
-`track_ended` is unchanged and still sent by all connected clients (debounce
-already handles deduplication).
+`dj_state` broadcast: `{ locked: true, unlockAt: <timestamp>, activeDjName: "Alice" }`
 
-### New server → client event (unicast only)
+When locked, the "Be the DJ" button shows a countdown. When unlocked, it re-enables.
 
-```json
-{ "event": "role_assigned", "data": { "role": "controller" } }
-{ "event": "role_assigned", "data": { "role": "viewer"     } }
-```
-
-This event is sent **only to the relevant client**, never broadcast to all.
-All existing broadcast events (`track_ready`, `status`, `progress`,
-`listener_count`, `error`) remain unchanged.
+The DJ cooldown is configurable in Advanced Options (1–120 min, default 30 min). It is set once by the controller at session start and applies to all viewers equally.
 
 ---
 
-## Backend Changes
+## WebSocket Protocol
 
-### `backend/radio.py`
+### Client → Server
 
-| Addition | Purpose |
-|---|---|
-| `_normalize_ip(raw)` | Normalises IPv6-mapped IPv4 addresses (e.g. `::ffff:192.168.1.1` → `192.168.1.1`) |
-| `_resolve_client_ip(ws)` | Reads real client IP from `CF-Connecting-IP` / `X-Forwarded-For` / `ws.client.host` |
-| `_is_local_ip(ip)` | Returns True for loopback and RFC 1918 private addresses (uses `ipaddress` stdlib) |
-| `_controller_ws: WebSocket \| None` | Tracks which connection is the controller |
-| `_pending_promotion: bool` | Deferred promotion flag (set when controller drops mid-generation) |
-| `add_ws(ws)` | Resolves real IP; assigns controller only if local and no controller active; otherwise viewer |
-| `remove_ws(ws)` | If controller: promote immediately or defer. Clear `_controller_ws`. |
-| `_promote_next_controller()` | Picks first **local** remaining WS; skips remote viewers; unicasts controller role |
-| `_send_to(ws, message)` | Unicast helper (single WS, no broadcast loop) |
-| `_send_state_snapshot(ws)` | Unicasts current track + status to one late-joining WS |
-| `start_from_ws(ws, ...)` | Checks `ws == _controller_ws`; calls `start()` if authorised |
-| `stop_from_ws(ws)` | Checks `ws == _controller_ws`; calls `stop()` if authorised |
-| `skip_from_ws(ws)` | Checks `ws == _controller_ws`; calls `skip()` if authorised |
-| `_generate_and_buffer_next()` | After completion, check `_pending_promotion` and call `_promote_next_controller()` if set |
-| `start()` | Reset `_pending_promotion = False` |
+| Event | Sender | Description |
+|---|---|---|
+| `start` | Controller | Begin session with genres, keywords, language, feeling, advancedOptions |
+| `stop` | Controller | Stop the radio |
+| `skip` | Controller | Skip current track |
+| `reschedule` | Controller | Change settings mid-session (current track keeps playing) |
+| `track_ended` | All clients | Notify server that the current track finished playing |
+| `dj_claim` | Viewer | Request the DJ slot |
+| `dj_submit` | Viewer (DJ) | Submit DJ's genre/mood/language selection + name |
 
-### `backend/main.py`
+### Server → Client
 
-- **WebSocket handler**: route `start`, `stop`, `skip` events to the new
-  `*_from_ws` methods; keep `track_ended` routing unchanged.
-- **Remove** REST endpoints: `POST /api/radio/start`, `POST /api/radio/stop`,
-  `POST /api/radio/skip` — these are now WebSocket-only and would bypass role
-  checks if kept open.
-- **Keep** REST endpoints: `GET /api/genres`, `GET /api/audio/{id}`,
-  `GET /api/radio/status`.
-
----
-
-## Frontend Changes
-
-### `frontend/src/types.ts`
-- Add `export type ClientRole = 'controller' | 'viewer'`
-- Add `'role_assigned'` to the `WSMessage` event union
-- Add `interface RoleAssignedData { role: ClientRole }`
-
-### `frontend/src/hooks/useRadio.ts`
-- Add `role: ClientRole | null` state (starts `null` during WS handshake)
-- Handle `role_assigned` event → `setRole(data.role)`
-- `start(genres, keywords, language)`: send `{ event: 'start', data: {...} }` over WS
-  instead of `fetch('/api/radio/start', ...)`
-- `stop()`: send `{ event: 'stop' }` over WS instead of `fetch('/api/radio/stop')`
-- Expose `role` in the hook return value
-
-### `frontend/src/App.tsx`
-Replace the current `view` state binary with role-aware rendering:
-
-```
-role === null          →  "Connecting…" full-screen spinner
-role === 'controller'  →  view === 'selector' ? <GenreSelector> : <RadioPlayer readonly={false}>
-role === 'viewer'      →  <RadioPlayer readonly={true}>   (always, ignores local view state)
-```
-
-The controller's existing `view` state machine stays exactly as-is internally.
-
-### `frontend/src/components/RadioPlayer.tsx`
-Add `readonly: boolean` prop. When `true`:
-- Render `"Listening"` pill where the "← Change genres" button normally sits
-- Disable (or hide) Stop/Play and Rewind buttons
-- When status is IDLE or STOPPED: show `"Waiting for host to start…"` instead of
-  the empty track placeholder
-
-### `frontend/src/App.css`
-- `.player__viewer-badge` — small muted pill: `"Listening"` / `"Now Listening"`
-- Viewer controls area: reduce opacity or hide buttons via `[disabled]` styling
+| Event | Target | Description |
+|---|---|---|
+| `role_assigned` | Unicast | `{ role: "controller" \| "viewer" }` |
+| `track_ready` | Broadcast | `{ track: {...}, isNext: bool }` |
+| `status` | Broadcast | `{ state, message, nextReady }` |
+| `progress` | Broadcast | `{ stage, message }` — LLM/ACE-Step progress |
+| `listener_count` | Broadcast | `{ count }` |
+| `viewer_list` | Controller only | `{ viewers: [{ ip, connectedAt }] }` |
+| `dj_state` | Broadcast | `{ locked, unlockAt, activeDjName }` |
+| `dj_claim_ack` | Unicast | `{ granted: bool }` |
+| `play_now` | Broadcast | `{ for_track_id }` — watchdog: forces transition if client missed `ended` event |
+| `error` | Broadcast or unicast | `{ message }` |
 
 ---
 
@@ -230,24 +182,25 @@ Add `readonly: boolean` prop. When `true`:
 
 | Scenario | Behaviour |
 |---|---|
-| Viewer connects, no session active | Shows read-only player with "Waiting for host…" |
-| Controller starts session, viewers join mid-generation | Viewers receive late-join snapshot (activity log entries not replayed, but current status is) |
+| Viewer connects, no session active | Read-only player with "Waiting for host to start the radio…" |
+| Controller starts session, viewers join mid-generation | Viewers receive late-join snapshot (activity log not replayed, but current status is) |
 | Controller stops session | All clients receive `status: stopped`; viewers stay on read-only player; controller returns to GenreSelector |
-| Controller drops mid-generation, no viewers | `_controller_ws = None`; generation continues; next person to connect becomes controller immediately |
-| Controller drops during PLAYING, next viewer promoted | Promoted client sees RadioPlayer with full controls + "Change genres" available |
-| Promoted controller hits "Change genres" | Sends `stop` over WS; session stops; GenreSelector shown to them; viewers see "Waiting for host…" |
-| Only one listener ever | Functions exactly like the current single-listener behaviour |
+| Controller drops mid-generation, no viewers | Generation continues; next local connection becomes controller |
+| Controller drops during PLAYING, viewer promoted | Promoted client sees RadioPlayer with full controls |
+| Promoted controller hits "← Back" | Returns to GenreSelector; can change genre without stopping current track |
+| Viewer taps "Be the DJ" during cooldown | Receives `dj_claim_ack: { granted: false }`; button stays disabled with countdown |
+| iOS client backgrounded / screen locked | Server's `play_now` watchdog forces track transition via `handleTrackEnded()` on return to foreground |
+| Only one listener ever | Functions exactly like single-listener behaviour |
 
 ---
 
-## Files Changed
+## Key Implementation Files
 
-| File | Change type |
+| File | Role |
 |---|---|
-| `backend/radio.py` | Role tracking, promotion, unicast, WS-control gate methods |
-| `backend/main.py` | Route new WS events; remove REST start/stop/skip |
-| `frontend/src/types.ts` | `ClientRole`, `RoleAssignedData`, updated event union |
-| `frontend/src/hooks/useRadio.ts` | `role` state; WS-based start/stop; `role_assigned` handler |
-| `frontend/src/App.tsx` | Role-aware rendering; viewer never sees GenreSelector |
-| `frontend/src/components/RadioPlayer.tsx` | `readonly` prop; viewer badge; disabled controls |
-| `frontend/src/App.css` | `.player__viewer-badge` and viewer-mode control styles |
+| `backend/radio.py` | Role tracking, promotion, unicast helpers, DJ mode, `play_now` watchdog |
+| `backend/main.py` | WS event routing, `_resolve_request_ip`, save-track local-only guard |
+| `frontend/src/hooks/useRadio.ts` | `role` state, `dj_*` state, `play_now` handler, `visibilitychange` retry |
+| `frontend/src/App.tsx` | Role-aware view routing; auto-promote to player on role change |
+| `frontend/src/components/RadioPlayer.tsx` | `readonly` prop; transport controls for all; DJ button for viewers; save for controller |
+| `frontend/src/components/DJPanel.tsx` | Modal: DJ name + genre/mood/language form |
