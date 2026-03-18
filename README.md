@@ -2,11 +2,9 @@
 
 A fully local, offline AI radio web app. Pick a genre, mood, vocal language, and describe what you're doing — the app generates and plays an endless stream of original AI-composed songs with no cloud APIs required.
 
-Installable as a **Progressive Web App (PWA)** on iPhone and Android for a native app experience.
-
 ## Requirements
 
-- Mac with Apple Silicon (M1/M2/M3/M4)
+- Mac with Apple Silicon (M1/M2/M3/M4/M5)
 - macOS 14+
 - 16 GB+ unified memory (24 GB+ recommended for development, 64 GB for production)
 - 50 GB+ free SSD space
@@ -45,37 +43,42 @@ Open **http://localhost:5173** in your browser.
 
 When `cloudflared` is installed, a public URL is printed in the startup banner — share it to access the app from any device.
 
-## Installing as a PWA (mobile)
-
-**iPhone (Safari only):** Open the app URL → Share → "Add to Home Screen". The app opens in standalone mode with no browser bar.
-
-**Android (Chrome):** Open the app URL → Chrome menu → "Install app" (or the install banner appears automatically).
-
-The Lock Screen and Dynamic Island will show the currently playing track title and genre, with interactive play/pause and ±10s seek controls.
-
 ## How it works
 
-1. Select a genre (24 options) and optional mood keywords (40 keywords in 3 display categories)
+1. Select a genre (36 options) and optional mood keywords (60 keywords across 4 categories)
 2. Choose a vocal language (11 languages) or instrumental mode
 3. Optionally describe what you're doing now in free text
-4. Optionally tune advanced ACE-Step parameters (time signature, inference steps, model variant)
+4. Optionally tune advanced ACE-Step parameters (time signature, inference steps, model variant, CoT flags)
 5. Click **Start Radio**
-6. A local LLM (Ollama + Qwen3.5) generates a dimension-based song prompt (style, instruments, mood, vocal style, production)
+6. A local LLM (Ollama + Qwen3.5:4b) generates a dimension-based song prompt (style, instruments, mood, vocal style, production)
 7. ACE-Step 1.5 generates a full MP3 with semantic audio codes for melodic structure
 8. The song plays in your browser with a live activity log showing generation progress
 9. The next song is pre-generated while the current one plays — the frontend pre-fetches audio bytes into memory for seamless, zero-latency transitions
 
 ## Multi-listener mode
 
-Multiple browsers can connect to the same session. The first **local-network** connection becomes the **controller** — they pick genres, start/stop the radio, pin seeds with "More Like This", and see connected listeners. Everyone else joins as a **viewer** with a read-only player.
+Multiple browsers can connect to the same session. The first **local-network** connection becomes the **controller** — they pick genres, start/stop the radio, save tracks, and see connected listeners. Everyone else joins as a **viewer** with a read-only player.
 
 Remote visitors connecting via the Cloudflare tunnel always join as viewers regardless of order.
 
 If the controller disconnects, the next **local** viewer is automatically promoted.
 
-## "More Like This" seed pinning
+## "Everyone can be a DJ" mode
 
-The controller can toggle **More Like This** to pin the current track's generation seed. All subsequent tracks will use the same seed, producing similar sonic character while the LLM generates fresh lyrics and styles. Toggle off to return to random seeds.
+Viewers can request the DJ slot via the **Be the DJ** button. When granted:
+
+- A DJ panel opens where the viewer enters their name and configures genre, mood, and language
+- Their selection becomes the next track's generation parameters
+- A cooldown timer (configurable, default 30 min) prevents rapid DJ switching
+- The active DJ's name is shown in the player ("PRESENTED BY [NAME]")
+
+## Mid-session genre changes
+
+The controller can navigate back to the genre selector at any time without stopping the current track. The new settings take effect from the next generated track onward.
+
+## Save tracks
+
+The controller can save the currently playing track to disk — both the MP3 and a JSON metadata file (title, genre, BPM, key, seed, lyrics, tags) are written to `saved_tracks/`. Remote viewers cannot trigger saves.
 
 ## Supported languages
 
@@ -90,6 +93,8 @@ The controller can configure ACE-Step parameters before starting:
 | Time Signature | Auto | 2/4, 3/4, 4/4, 6/8 |
 | Inference Steps | 8 | 4–100 (more = higher quality, slower) |
 | DiT Model Variant | turbo | turbo, turbo-shift1, turbo-shift3, turbo-continuous |
+| ACE-Step CoT Flags | Thinking ON, CoT Caption/Metas OFF, CoT Language ON | per-flag toggles |
+| DJ Cooldown | 30 min | 1–120 min |
 
 See the [ACE-Step 1.5 Tutorial](https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/Tutorial.md) for details on what each parameter does.
 
@@ -142,7 +147,7 @@ tail -f /tmp/generative-radio-cloudflared.log # Cloudflare tunnel
 
 Backend log format: `HH:MM:SS [LEVEL] module: [component] message`
 
-Frontend logs are in the browser DevTools console with `[WS]`, `[Radio]`, and `[Audio]` prefixes.
+Frontend logs are in the browser DevTools console with `[WS]`, `[Radio]`, `[Audio]`, and `[GenreSelector]` prefixes.
 
 ## Manual service control
 
