@@ -27,7 +27,7 @@ class SongPrompt(BaseModel):
     lyrics: str = Field(default="", description="Song lyrics with structure tags like [Intro], [Verse], [Pre-Chorus], [Chorus], [Bridge], [Outro], [Fade Out]")
     bpm: int = Field(default=90, description="Tempo in BPM", ge=30, le=300)
     key_scale: str = Field(default="C Major", description="Musical key, e.g. 'C Major', 'Am', 'F# Minor'")
-    duration: int = Field(default=60, description="Song duration in seconds", ge=30)
+    duration: int = Field(default=60, description="Song duration in seconds")
 
     @property
     def tags(self) -> str:
@@ -53,8 +53,8 @@ class SongPrompt(BaseModel):
     @field_validator("duration")
     @classmethod
     def clamp_duration(cls, v: int) -> int:
-        """Hard cap — safety net in case the LLM ignores the prompt instruction."""
-        return min(v, MAX_DURATION_S)
+        """Clamp to [30, MAX_DURATION_S] — safety net in case the LLM ignores the prompt."""
+        return max(30, min(v, MAX_DURATION_S))
 
 
 class TrackInfo(BaseModel):
@@ -81,3 +81,12 @@ class RadioStartRequest(BaseModel):
 class WSMessage(BaseModel):
     event: str  # "track_ready" | "status" | "error"
     data: dict
+
+
+class ReactionAction(str, Enum):
+    THUMB_UP = "thumb_up"
+    THUMB_DOWN = "thumb_down"
+
+
+class ReactRequest(BaseModel):
+    action: ReactionAction

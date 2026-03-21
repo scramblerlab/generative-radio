@@ -767,6 +767,62 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 
 .player__icon-btn:not(:disabled):active { transform: scale(0.93); }
 
+/* Reaction buttons — thumb up / thumb down */
+.player__reactions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin: 20px 0 4px;
+}
+
+.player__reaction-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color 0.15s, background 0.15s, color 0.15s, transform 0.1s;
+}
+
+.player__reaction-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.player__reaction-btn:not(:disabled):hover {
+  border-color: var(--border-2);
+  color: var(--text);
+}
+
+.player__reaction-btn:not(:disabled):active {
+  transform: scale(0.95);
+}
+
+.player__reaction-btn--up.player__reaction-btn--active {
+  border-color: var(--accent);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.player__reaction-btn--down.player__reaction-btn--active {
+  border-color: var(--red);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--red);
+}
+
+.player__reaction-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  min-width: 14px;
+  text-align: left;
+}
+
 /* Activity log */
 .activity-log {
   margin: 18px 0 4px;

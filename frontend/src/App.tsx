@@ -92,6 +92,8 @@ export default function App() {
             djUnlockAt={radio.djUnlockAt}
             activeDjName={radio.activeDjName}
             onClaimDj={radio.claimDj}
+            reactionState={radio.reactionState}
+            onReact={radio.currentTrack ? (action) => radio.react(radio.currentTrack!.id, action) : undefined}
           />
         ) : (
           view === 'selector' ? (
@@ -120,6 +122,8 @@ export default function App() {
               djUnlockAt={radio.djUnlockAt}
               activeDjName={radio.activeDjName}
               onClaimDj={radio.claimDj}
+              reactionState={radio.reactionState}
+              onReact={radio.currentTrack ? (action) => radio.react(radio.currentTrack!.id, action) : undefined}
             />
           )
         )}
