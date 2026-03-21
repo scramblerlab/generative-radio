@@ -49,7 +49,7 @@ export interface AdvancedOptions {
   useCotCaption: boolean;    // default true
   useCotMetas: boolean;      // default true
   useCotLanguage: boolean;   // default true — LM reads lyrics to detect language AND instrumental intent
-  djLockSeconds: number;     // DJ cooldown duration in seconds, default 1800
+  djLockSeconds: number;     // DJ cooldown duration in seconds, default 180
 }
 
 export interface Language {
