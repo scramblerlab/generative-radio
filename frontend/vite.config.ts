@@ -1,5 +1,34 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import type { Plugin } from 'vite'
+
+// Ensure index.html is never served from browser cache so new deployments are
+// picked up immediately. Hashed assets (JS/CSS in /assets/) are safe to cache
+// forever since their filenames change with every build.
+function cacheControlPlugin(): Plugin {
+  const setCacheHeaders = (pathname: string, setHeader: (name: string, value: string) => void) => {
+    if (pathname === '/' || pathname.endsWith('.html')) {
+      setHeader('Cache-Control', 'no-cache');
+    } else if (pathname.startsWith('/assets/')) {
+      setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  };
+  return {
+    name: 'cache-control',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        setCacheHeaders((req as { url?: string }).url ?? '/', (k, v) => res.setHeader(k, v));
+        next();
+      });
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use((req, res, next) => {
+        setCacheHeaders((req as { url?: string }).url ?? '/', (k, v) => res.setHeader(k, v));
+        next();
+      });
+    },
+  };
+}
 
 // Security headers applied in both dev and preview modes.
 // CSP is intentionally omitted here — it is added only in preview (below) because
@@ -39,7 +68,7 @@ const backendProxy = {
 };
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), cacheControlPlugin()],
   server: {
     port: 5173,
     allowedHosts: true, // allow tunnel hosts (cloudflare, ngrok, etc.)

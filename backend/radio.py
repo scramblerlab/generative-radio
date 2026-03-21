@@ -150,7 +150,7 @@ class RadioOrchestrator:
         self._pending_promotion: bool = False  # Promote next viewer once prebuffer finishes
 
         # DJ mode
-        self._DJ_LOCK_S: float = 1800.0  # default 30 min; overridden by advanced_options.djLockSeconds
+        self._DJ_LOCK_S: float = 180.0  # default 3 min; overridden by advanced_options.djLockSeconds
         self._dj_lock_until: float = time.time() + self._DJ_LOCK_S  # locked on server start
         self._dj_claimant_ws: WebSocket | None = None  # WS that won claim but hasn't submitted yet
         self._dj_name: str = ""  # Current DJ name; drives title suffix for all subsequent tracks
