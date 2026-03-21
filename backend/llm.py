@@ -57,6 +57,7 @@ _FIELD_RE = re.compile(r"^([A-Z][A-Z_0-9]*)\s*:\s*(.*)", re.IGNORECASE | re.MULT
 
 _KEY_MAP = {
     "TITLE":       "song_title",
+    "SONG_TITLE":  "song_title",  # LLM sometimes uses SONG_TITLE instead of TITLE
     "STYLE":       "style",
     "INSTRUMENTS": "instruments",
     "MOOD":        "mood",
@@ -91,7 +92,7 @@ def _parse_labeled_text(raw: str) -> SongPrompt:
     lines = raw.splitlines()
     start_idx = 0
     for i, line in enumerate(lines):
-        if re.match(r"^TITLE\s*:", line, re.IGNORECASE):
+        if re.match(r"^(?:SONG_)?TITLE\s*:", line, re.IGNORECASE):
             start_idx = i
             break
     relevant = "\n".join(lines[start_idx:])
@@ -142,6 +143,10 @@ def _parse_labeled_text(raw: str) -> SongPrompt:
                 logger.warning(f"[llm] Could not parse numeric field {label}={val!r} — using default")
         else:
             kwargs[field_name] = val
+
+    if "song_title" not in kwargs:
+        logger.warning("[llm] _parse_labeled_text: song_title missing — using fallback title")
+        kwargs["song_title"] = "Untitled"
 
     return SongPrompt(**kwargs)
 
