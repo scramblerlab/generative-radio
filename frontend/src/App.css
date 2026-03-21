@@ -1113,6 +1113,47 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   to { transform: rotate(360deg); }
 }
 
+/* ── DJ Info section ─────────────────────────────────── */
+.player__dj-info {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.player__dj-info-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 4px;
+}
+
+.player__dj-info-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.player__dj-info-label {
+  font-size: 11px;
+  color: var(--border-2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 62px;
+  flex-shrink: 0;
+}
+
+.player__dj-info-value {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 /* ── DJ button in player ─────────────────────────────── */
 .player__dj-section {
   margin-top: 24px;

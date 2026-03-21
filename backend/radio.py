@@ -154,6 +154,7 @@ class RadioOrchestrator:
         self._dj_lock_until: float = time.time() + self._DJ_LOCK_S  # locked on server start
         self._dj_claimant_ws: WebSocket | None = None  # WS that won claim but hasn't submitted yet
         self._dj_name: str = ""  # Current DJ name; drives title suffix for all subsequent tracks
+        self._pending_settings: dict | None = None  # Queued genre/keyword change, applied on next _start_prebuffer()
 
     # ------------------------------------------------------------------ #
     # WebSocket connection management
@@ -314,6 +315,7 @@ class RadioOrchestrator:
         self.thumb_up_voters.clear()
         self.thumb_down_voters.clear()
         self.reaction_locks.clear()
+        self._pending_settings = None
         logger.info("[radio] Session stopped and cleaned up")
 
     async def skip(self) -> None:
@@ -386,8 +388,15 @@ class RadioOrchestrator:
         feeling: str = "",
         advanced_options: dict | None = None,
     ) -> None:
-        """Update settings mid-session: keep current track playing, restart pre-buffer with new settings.
-        Falls back to a full start() if not currently in a playing/buffering state."""
+        """Update settings mid-session without interrupting in-flight generation.
+
+        New settings are queued in _pending_settings and applied at the start of
+        the next generation cycle (inside _start_prebuffer). This guarantees that
+        any already-generating or already-buffered track plays to completion before
+        the genre/keyword change takes effect, eliminating silent gaps on DJ transitions.
+
+        Falls back to a full start() if not currently in a playing/buffering state.
+        """
         if self.state not in (RadioState.PLAYING, RadioState.BUFFERING):
             logger.info("[radio] reschedule called but not playing — doing full start()")
             await self.start(genres, keywords, language, feeling, advanced_options)
@@ -397,44 +406,31 @@ class RadioOrchestrator:
             f"[radio] Rescheduling — new genres: {genres}, keywords: {keywords}, language: {language}"
         )
 
-        # Update settings (take effect for the next generated track onwards)
-        if genres == ['__random__']:
-            self._random_genre = True
-            self.genres = []
+        # Queue the new settings; they will be applied when _start_prebuffer() next fires.
+        # Overwrite any previously queued (but not yet applied) settings.
+        self._pending_settings = {
+            'genres': genres,
+            'keywords': keywords,
+            'language': language,
+            'feeling': feeling,
+            'advanced_options': advanced_options,
+        }
+
+        prebuffer_active = self._prebuffer_task and not self._prebuffer_task.done()
+
+        if not prebuffer_active and self.next_track is None:
+            # Nothing in the pipeline — apply immediately so we don't introduce extra delay
+            self._apply_pending_settings()
+            self._start_prebuffer()
+            await self._broadcast_status("playing", "Settings updated — generating next track...")
+        elif prebuffer_active:
+            # In-flight generation continues with old settings; new settings apply next cycle
+            logger.info("[radio] Prebuffer in-flight — settings queued, will apply after generation completes")
+            await self._broadcast_status("playing", "Settings queued — current track finishing generation...")
         else:
-            self._random_genre = False
-            self.genres = genres
-        self.keywords, self._random_keyword_categories = _parse_keywords(keywords)
-        logger.info(
-            f"[radio] Keywords parsed — fixed: {self.keywords or 'none'}, "
-            f"random categories: {self._random_keyword_categories or 'none'}"
-        )
-        self.language = language
-        self.feeling = feeling
-        self.advanced_options = advanced_options or {}
-        if self.advanced_options:
-            self._saved_advanced_options = dict(self.advanced_options)
-            self._DJ_LOCK_S = float(self.advanced_options.get("djLockSeconds", self._DJ_LOCK_S))
-        self.history = []        # Reset so new genre isn't biased by old session history
-
-        # Discard any pre-buffered next track — it was generated with old settings
-        self._cancel_prebuffer()
-        if self.next_track:
-            _discard_id = self.next_track.id
-            self.audio_cache.pop(_discard_id, None)
-            self.prompt_cache.pop(_discard_id, None)
-            self.seed_cache.pop(_discard_id, None)
-            self.track_info_cache.pop(_discard_id, None)
-            logger.info(
-                f"[radio] Discarded pre-buffered track '{self.next_track.song_title}' (old settings)"
-            )
-        self.next_track = None
-        self._next_track_ready_event.clear()
-
-        # Kick off a fresh pre-buffer with the new settings; current track keeps playing
-        self._start_prebuffer()
-
-        await self._broadcast_status("playing", "Settings updated — generating next track...")
+            # next_track already buffered (old settings) — it plays next, then new settings kick in
+            logger.info("[radio] Next track already buffered — settings queued, will apply on next generation")
+            await self._broadcast_status("playing", "Settings queued — will apply on next generation...")
 
     async def reschedule_from_ws(
         self,
@@ -485,9 +481,46 @@ class RadioOrchestrator:
             logger.debug("[radio] Cancelled in-flight prebuffer task")
         self._prebuffer_task = None
 
+    def _apply_pending_settings(self) -> None:
+        """Apply queued genre/keyword/language settings and reset history.
+
+        Called from _start_prebuffer() so new settings take effect at the
+        start of the next generation cycle rather than interrupting in-flight work.
+        """
+        ps = self._pending_settings
+        self._pending_settings = None
+        if ps is None:
+            return
+        genres = ps['genres']
+        if genres == ['__random__']:
+            self._random_genre = True
+            self.genres = []
+        else:
+            self._random_genre = False
+            self.genres = genres
+        self.keywords, self._random_keyword_categories = _parse_keywords(ps['keywords'])
+        self.language = ps['language']
+        self.feeling = ps['feeling']
+        ao = ps.get('advanced_options') or {}
+        self.advanced_options = ao
+        if ao:
+            self._saved_advanced_options = dict(ao)
+            self._DJ_LOCK_S = float(ao.get("djLockSeconds", self._DJ_LOCK_S))
+        self.history = []
+        logger.info(
+            f"[radio] Applied queued settings — genres: {genres}, "
+            f"keywords: {ps['keywords']}, language: {ps['language']}"
+        )
+
     def _start_prebuffer(self) -> None:
-        """Cancel any existing prebuffer task and start a fresh one."""
+        """Cancel any existing prebuffer task and start a fresh one.
+
+        Applies any pending settings (queued by reschedule()) before starting
+        so the new generation uses the correct genre/keywords.
+        """
         self._cancel_prebuffer()
+        if self._pending_settings:
+            self._apply_pending_settings()
         self._prebuffer_task = asyncio.create_task(
             self._generate_and_buffer_next(), name="radio-prebuffer"
         )
@@ -772,6 +805,8 @@ class RadioOrchestrator:
         short_id = str(uuid.uuid4())[:8]
         track_index = len(self.history)  # 0-based; history grows after each completed track
         target_duration = get_progressive_duration(track_index)
+        # Snapshot DJ name now so a mid-generation DJ change doesn't bleed into this track's title
+        dj_name_for_track = self._dj_name
         logger.info(
             f"[radio] [{short_id}] Starting track generation "
             f"(session history: {track_index} songs, target duration: {target_duration}s)"
@@ -916,9 +951,9 @@ class RadioOrchestrator:
         )
         # Apply DJ name suffix to title if a DJ session is active.
         # History above still uses the raw LLM title so the model's context stays clean.
-        if self._dj_name:
+        if dj_name_for_track:
             track_info = track_info.model_copy(
-                update={"song_title": f"{track_info.song_title} (DJ: {self._dj_name})"}
+                update={"song_title": f"{track_info.song_title} (DJ: {dj_name_for_track})"}
             )
 
         self.track_info_cache[track_id] = track_info
@@ -942,7 +977,7 @@ class RadioOrchestrator:
             "mood": song_prompt.mood,
             "vocalStyle": song_prompt.vocal_style,
             "production": song_prompt.production,
-            "djName": self._dj_name,
+            "djName": dj_name_for_track,
             # Audio bytes are stored here so the MP3 can be written to disk on first
             # reaction even if audio_cache has already been evicted.
             "_audio_bytes": audio_bytes,

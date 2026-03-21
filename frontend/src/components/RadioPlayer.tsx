@@ -330,6 +330,39 @@ const isPlaying = status === 'playing';
           </>
         )}
 
+        {/* DJ Info — visible to all users when a DJ session is active */}
+        {(activeDjName || djName) && track && (
+          <div className="player__dj-info">
+            <h3 className="player__dj-info-heading">DJ Info</h3>
+            <div className="player__dj-info-row">
+              <span className="player__dj-info-label">Name</span>
+              <span className="player__dj-info-value">{activeDjName || djName}</span>
+            </div>
+            {sessionInfo?.genre && (
+              <div className="player__dj-info-row">
+                <span className="player__dj-info-label">Genre</span>
+                <span className="player__dj-info-value">
+                  {sessionInfo.isRandom ? `Random · ${sessionInfo.genre}` : sessionInfo.genre}
+                </span>
+              </div>
+            )}
+            {sessionInfo && sessionInfo.keywords.length > 0 && (
+              <div className="player__dj-info-row">
+                <span className="player__dj-info-label">Keywords</span>
+                <span className="player__dj-info-value">{sessionInfo.keywords.join(' · ')}</span>
+              </div>
+            )}
+            {sessionInfo?.language && (
+              <div className="player__dj-info-row">
+                <span className="player__dj-info-label">Language</span>
+                <span className="player__dj-info-value">
+                  {sessionInfo.language === 'instrumental' ? 'Instrumental' : sessionInfo.language.toUpperCase()}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* DJ mode — visible to all users */}
         <div className="player__dj-section">
           <button
@@ -341,9 +374,6 @@ const isPlaying = status === 'playing';
           </button>
           {effectiveDjLocked && djCountdown && (
             <p className="player__dj-unlock-timer">Unlocks in {djCountdown}</p>
-          )}
-          {activeDjName && (
-            <p className="player__dj-active">Now curated by {activeDjName}</p>
           )}
         </div>
       </div>

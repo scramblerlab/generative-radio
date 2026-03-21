@@ -17,13 +17,6 @@ DURATION_SMALL_S = 30             # fast iteration on ≤24 GB dev machines
 DURATION_DEFAULT_S = 60           # standard on 25–47 GB machines
 DURATION_LARGE_S = 180            # safe on ≥48 GB machines (~33 GB MLX VAE buffer)
 
-# Progressive duration ramp for large-memory machines (track index → seconds):
-#   Track 0 (first):  60 s — quick start
-#   Track 1 (second): 120 s — medium
-#   Track 2+ (third+): 180 s — full length
-_PROGRESSIVE_DURATIONS = [DURATION_DEFAULT_S, 120, DURATION_LARGE_S]
-
-
 
 def get_unified_memory_gb() -> int:
     """Read total unified memory via sysctl — Apple Silicon / macOS only."""
@@ -96,21 +89,13 @@ MAX_DURATION_S: int = select_max_duration()
 
 
 def get_progressive_duration(track_index: int) -> int:
-    """Return the target audio duration (seconds) for a 0-based track index.
+    """Return the target audio duration (seconds) for this machine.
 
-    On ≥48 GB machines the duration ramps up so the first track starts quickly:
-      - Track 0: 60 s
-      - Track 1: 120 s
-      - Track 2+: 180 s
-
-    On <48 GB machines every track uses the safe default (60 s).
+    All tracks use the same fixed duration — the progressive ramp (60→120→180 s)
+    has been removed to simplify the pipeline and eliminate duration-related
+    silent gaps on DJ/genre transitions.
     """
-    if _MEMORY_GB <= DURATION_SMALL_THRESHOLD_GB:
-        return DURATION_SMALL_S
-    if _MEMORY_GB < DURATION_THRESHOLD_GB:
-        return DURATION_DEFAULT_S
-    idx = min(track_index, len(_PROGRESSIVE_DURATIONS) - 1)
-    return _PROGRESSIVE_DURATIONS[idx]
+    return MAX_DURATION_S
 
 
 def mem_snapshot() -> str:
