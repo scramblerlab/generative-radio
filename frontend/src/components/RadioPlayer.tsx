@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Track, RadioStatus, ActivityEntry, ProgressStage, ViewerInfo, SessionInfo } from '../types';
+import { Track, RadioStatus, ActivityEntry, ProgressStage, ViewerInfo, SessionInfo, ReactionState } from '../types';
 import { StatusBar } from './StatusBar';
 
 const STAGE_ICON: Record<ProgressStage, string> = {
@@ -77,6 +77,9 @@ interface RadioPlayerProps {
   djUnlockAt: number;
   activeDjName?: string;
   onClaimDj: () => void;
+  // Reactions
+  reactionState?: ReactionState;
+  onReact?: (action: 'thumb_up' | 'thumb_down') => void;
 }
 
 function Equalizer({ active }: { active: boolean }) {
@@ -112,6 +115,8 @@ export function RadioPlayer({
   djUnlockAt,
   activeDjName,
   onClaimDj,
+  reactionState,
+  onReact,
 }: RadioPlayerProps) {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'error'>('idle');
   const [showToast, setShowToast] = useState(false);
@@ -286,6 +291,36 @@ export function RadioPlayer({
                 <path d="M18 13c0 3.31-2.69 6-6 6s-6-2.69-6-6 2.69-6 6-6v4l5-5-5-5v4c-4.42 0-8 3.58-8 8s3.58 8 8 8 8-3.58 8-8h-2z"/>
                 <text x="12" y="15.5" textAnchor="middle" fontSize="6" fontFamily="sans-serif" fontWeight="bold" fill="currentColor">10</text>
               </svg>
+            </button>
+          </div>
+        )}
+
+        {/* Reaction buttons — thumb up / thumb down, visible to all users */}
+        {track && onReact && (
+          <div className="player__reactions">
+            <button
+              className={`player__reaction-btn player__reaction-btn--up${reactionState?.userReaction === 'thumb_up' ? ' player__reaction-btn--active' : ''}`}
+              onClick={() => onReact('thumb_up')}
+              aria-label="Thumb up"
+              aria-pressed={reactionState?.userReaction === 'thumb_up'}
+              title="I like this track"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/>
+              </svg>
+              <span className="player__reaction-count">{reactionState?.thumbUp ?? 0}</span>
+            </button>
+            <button
+              className={`player__reaction-btn player__reaction-btn--down${reactionState?.userReaction === 'thumb_down' ? ' player__reaction-btn--active' : ''}`}
+              onClick={() => onReact('thumb_down')}
+              aria-label="Thumb down"
+              aria-pressed={reactionState?.userReaction === 'thumb_down'}
+              title="Not my style"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L10.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/>
+              </svg>
+              <span className="player__reaction-count">{reactionState?.thumbDown ?? 0}</span>
             </button>
           </div>
         )}

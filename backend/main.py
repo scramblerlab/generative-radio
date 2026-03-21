@@ -23,6 +23,7 @@ from genres import GENRES, KEYWORDS, LANGUAGES
 from llm import OllamaClient
 from acestep_client import ACEStepClient
 from radio import RadioOrchestrator, _is_local_ip, _normalize_ip
+from models import ReactRequest
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,7 @@ def _iter_audio(data: bytes, chunk_size: int = 65_536):
 
 
 SAVED_TRACKS_DIR = Path(__file__).parent.parent / "saved_tracks"
+REACTIONS_DIR = Path(__file__).parent.parent / "tracks_with_user_action"
 
 
 @app.get("/api/audio/{track_id}")
@@ -263,6 +265,40 @@ async def save_track(track_id: str, request: Request):
 
     logger.info(f"[main] Track saved: {base_name}")
     return {"baseName": base_name}
+
+
+@app.post("/api/tracks/{track_id}/react")
+async def react_to_track(track_id: str, body: ReactRequest, request: Request):
+    """Toggle a thumb_up or thumb_down reaction for the requesting client.
+
+    Available to all clients (controller and viewers). Uses toggle semantics:
+    pressing the same action again removes the vote; pressing the opposite side
+    switches sides.
+    """
+    client_ip = _resolve_request_ip(request)
+    logger.info(f"[main] POST /api/tracks/{track_id}/react — action={body.action.value}, ip={client_ip}")
+    try:
+        result = await radio.react(
+            track_id=track_id,
+            action=body.action.value,
+            client_ip=client_ip,
+            reactions_dir=REACTIONS_DIR,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return result
+
+
+@app.get("/api/tracks/{track_id}/reactions")
+async def get_track_reactions(track_id: str, request: Request):
+    """Return current reaction counts and the caller's current vote for a track."""
+    client_ip = _resolve_request_ip(request)
+    logger.debug(f"[main] GET /api/tracks/{track_id}/reactions — ip={client_ip}")
+    return await radio.get_reactions(
+        track_id=track_id,
+        client_ip=client_ip,
+        reactions_dir=REACTIONS_DIR,
+    )
 
 
 # ------------------------------------------------------------------ #

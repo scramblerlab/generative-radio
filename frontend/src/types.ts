@@ -59,8 +59,20 @@ export interface Language {
 
 // WebSocket message shape from the server
 export interface WSMessage {
-  event: 'track_ready' | 'status' | 'error' | 'progress' | 'listener_count' | 'role_assigned' | 'viewer_list' | 'dj_state' | 'dj_claim_ack';
+  event: 'track_ready' | 'status' | 'error' | 'progress' | 'listener_count' | 'role_assigned' | 'viewer_list' | 'dj_state' | 'dj_claim_ack' | 'play_now' | 'reaction_update';
   data: Record<string, unknown>;
+}
+
+export interface ReactionState {
+  thumbUp: number;
+  thumbDown: number;
+  userReaction: 'thumb_up' | 'thumb_down' | null;
+}
+
+export interface ReactionUpdateData {
+  trackId: string;
+  thumbUp: number;
+  thumbDown: number;
 }
 
 export interface ListenerCountData {

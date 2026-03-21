@@ -1,10 +1,13 @@
 import asyncio
 import contextlib
 import ipaddress
+import json
 import logging
 import random
 import time
 import uuid
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import WebSocket
@@ -115,6 +118,15 @@ class RadioOrchestrator:
         self.prompt_cache: dict[str, SongPrompt] = {}  # track_id → SongPrompt (for save)
         self.seed_cache: dict[str, str] = {}           # track_id → ACE-Step seed (for save)
         self.track_info_cache: dict[str, TrackInfo] = {}  # track_id → TrackInfo (for save)
+
+        # Reaction tracking (in-memory; never written to disk directly)
+        self.thumb_up_voters: dict[str, set[str]] = {}    # track_id → set of voter IPs
+        self.thumb_down_voters: dict[str, set[str]] = {}  # track_id → set of voter IPs
+        self.reaction_locks: dict[str, asyncio.Lock] = {} # track_id → asyncio.Lock
+        # Snapshot of track metadata + audio bytes captured at generation time.
+        # Unlike track_info_cache/audio_cache (evicted on track transition), this
+        # persists for the whole session so users can still react after a track ends.
+        self.reaction_metadata_cache: dict[str, dict] = {}  # track_id → metadata blob
 
         # Async primitives
         self._task: asyncio.Task | None = None
@@ -291,6 +303,10 @@ class RadioOrchestrator:
         self.prompt_cache.clear()
         self.seed_cache.clear()
         self.track_info_cache.clear()
+        self.reaction_metadata_cache.clear()
+        self.thumb_up_voters.clear()
+        self.thumb_down_voters.clear()
+        self.reaction_locks.clear()
         logger.info("[radio] Session stopped and cleaned up")
 
     async def skip(self) -> None:
@@ -896,7 +912,155 @@ class RadioOrchestrator:
             )
 
         self.track_info_cache[track_id] = track_info
+
+        # Snapshot everything needed to write the reaction JSON file later.
+        # Stored separately from track_info_cache/audio_cache so it survives
+        # the track-transition eviction and is available even after the track ends.
+        self.reaction_metadata_cache[track_id] = {
+            "trackId": track_id,
+            "songTitle": track_info.song_title,
+            "genre": track_info.genre,
+            "bpm": track_info.bpm,
+            "keyScale": track_info.key_scale,
+            "duration": track_info.duration,
+            "language": self.language,
+            "keywords": list(self.keywords),
+            "tags": song_prompt.tags,
+            "lyrics": song_prompt.lyrics,
+            "style": song_prompt.style,
+            "instruments": song_prompt.instruments,
+            "mood": song_prompt.mood,
+            "vocalStyle": song_prompt.vocal_style,
+            "production": song_prompt.production,
+            "djName": self._dj_name,
+            # Audio bytes are stored here so the MP3 can be written to disk on first
+            # reaction even if audio_cache has already been evicted.
+            "_audio_bytes": audio_bytes,
+        }
+
         return track_info
+
+    # ------------------------------------------------------------------ #
+    # Reactions (thumb up / thumb down)
+    # ------------------------------------------------------------------ #
+
+    async def react(
+        self,
+        track_id: str,
+        action: str,
+        client_ip: str,
+        reactions_dir: Path,
+    ) -> dict:
+        """Toggle a thumb_up or thumb_down reaction for a client IP.
+
+        Returns {"thumb_up": int, "thumb_down": int, "userReaction": str | None}.
+        Raises ValueError if no track metadata is available to create a new record.
+        """
+        if track_id not in self.reaction_locks:
+            self.reaction_locks[track_id] = asyncio.Lock()
+        if track_id not in self.thumb_up_voters:
+            self.thumb_up_voters[track_id] = set()
+        if track_id not in self.thumb_down_voters:
+            self.thumb_down_voters[track_id] = set()
+
+        async with self.reaction_locks[track_id]:
+            up = self.thumb_up_voters[track_id]
+            down = self.thumb_down_voters[track_id]
+
+            if action == "thumb_up":
+                if client_ip in up:
+                    up.discard(client_ip)
+                    new_reaction = None
+                else:
+                    up.add(client_ip)
+                    down.discard(client_ip)
+                    new_reaction = "thumb_up"
+            else:  # thumb_down
+                if client_ip in down:
+                    down.discard(client_ip)
+                    new_reaction = None
+                else:
+                    down.add(client_ip)
+                    up.discard(client_ip)
+                    new_reaction = "thumb_down"
+
+            counts = {"thumb_up": len(up), "thumb_down": len(down)}
+            await self._write_reaction_file(track_id, counts, reactions_dir)
+
+        await self.broadcast(WSMessage(
+            event="reaction_update",
+            data={"trackId": track_id, "thumbUp": counts["thumb_up"], "thumbDown": counts["thumb_down"]},
+        ))
+        return {**counts, "userReaction": new_reaction}
+
+    async def _write_reaction_file(
+        self, track_id: str, counts: dict, reactions_dir: Path
+    ) -> None:
+        """Create or update the track's reaction JSON file on disk."""
+        reactions_dir.mkdir(exist_ok=True)
+        json_path = reactions_dir / f"{track_id}.json"
+        loop = asyncio.get_event_loop()
+
+        if json_path.exists():
+            existing = json.loads(json_path.read_text(encoding="utf-8"))
+            existing["thumb_up"] = counts["thumb_up"]
+            existing["thumb_down"] = counts["thumb_down"]
+            data = existing
+        else:
+            meta = self.reaction_metadata_cache.get(track_id)
+            if not meta:
+                logger.warning(f"[radio] reaction_metadata_cache miss for {track_id} — cannot create file")
+                raise ValueError("Track metadata unavailable — too late to react")
+
+            # Save MP3 alongside the JSON so the record is self-contained
+            audio_bytes: bytes = meta.get("_audio_bytes") or self.audio_cache.get(track_id, b"")
+            mp3_path = reactions_dir / f"{track_id}.mp3"
+            if audio_bytes:
+                await loop.run_in_executor(None, mp3_path.write_bytes, audio_bytes)
+                audio_path = str(mp3_path.resolve())
+            else:
+                logger.warning(f"[radio] Audio bytes unavailable for {track_id} — skipping MP3 write")
+                audio_path = ""
+
+            data = {k: v for k, v in meta.items() if not k.startswith("_")}
+            data["recordedAt"] = datetime.utcnow().isoformat()
+            data["audioPath"] = audio_path
+            data["thumb_up"] = counts["thumb_up"]
+            data["thumb_down"] = counts["thumb_down"]
+
+        json_text = json.dumps(data, indent=2, ensure_ascii=False)
+        await loop.run_in_executor(None, json_path.write_text, json_text, "utf-8")
+        logger.debug(
+            f"[radio] Reaction file updated: {json_path.name} — "
+            f"up={counts['thumb_up']}, down={counts['thumb_down']}"
+        )
+
+    async def get_reactions(
+        self, track_id: str, client_ip: str, reactions_dir: Path
+    ) -> dict:
+        """Return current reaction counts and the caller's vote for a track."""
+        up = len(self.thumb_up_voters.get(track_id, set()))
+        down = len(self.thumb_down_voters.get(track_id, set()))
+
+        if client_ip in self.thumb_up_voters.get(track_id, set()):
+            user_reaction = "thumb_up"
+        elif client_ip in self.thumb_down_voters.get(track_id, set()):
+            user_reaction = "thumb_down"
+        else:
+            user_reaction = None
+
+        # Fall back to file counts if in-memory is zero (e.g. after server restart)
+        if up == 0 and down == 0:
+            json_path = reactions_dir / f"{track_id}.json"
+            if json_path.exists():
+                try:
+                    saved = json.loads(json_path.read_text(encoding="utf-8"))
+                    up = saved.get("thumb_up", 0)
+                    down = saved.get("thumb_down", 0)
+                except Exception:
+                    pass
+
+        return {"thumb_up": up, "thumb_down": down, "userReaction": user_reaction}
 
     # ------------------------------------------------------------------ #
     # DJ mode

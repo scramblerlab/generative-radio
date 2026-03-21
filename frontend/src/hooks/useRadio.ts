@@ -16,6 +16,8 @@ import {
   AdvancedOptions,
   DjStateData,
   DjClaimAckData,
+  ReactionState,
+  ReactionUpdateData,
 } from '../types';
 
 export interface UseRadioReturn {
@@ -47,6 +49,9 @@ export interface UseRadioReturn {
   claimDj: () => void;
   submitDj: (genres: string[], keywords: string[], language: string, feeling: string, djName: string) => void;
   closeDjPanel: () => void;
+  // Reactions
+  reactionState: ReactionState;
+  react: (trackId: string, action: 'thumb_up' | 'thumb_down') => Promise<void>;
 }
 
 const WS_URL = '/ws';
@@ -73,6 +78,11 @@ export function useRadio(): UseRadioReturn {
   const [djUnlockAt, setDjUnlockAt] = useState(0);
   const [activeDjName, setActiveDjName] = useState('');
   const [djPanelOpen, setDjPanelOpen] = useState(false);
+
+  // Reaction state
+  const emptyReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
+  const [reactionState, setReactionState] = useState<ReactionState>(emptyReaction);
+  const reactionStateRef = useRef<ReactionState>(emptyReaction);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const roleRef = useRef<ClientRole | null>(null);          // Ref mirror of role (stale-closure safe for WS callbacks)
@@ -350,6 +360,25 @@ export function useRadio(): UseRadioReturn {
           } else {
             playTrack(track);
           }
+
+          // Reset reaction state for the new track, then fetch current counts from server
+          const resetReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
+          setReactionState(resetReaction);
+          reactionStateRef.current = resetReaction;
+          fetch(`/api/tracks/${track.id}/reactions`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: { thumb_up: number; thumb_down: number; userReaction: string | null } | null) => {
+              if (data) {
+                const fetched: ReactionState = {
+                  thumbUp: data.thumb_up,
+                  thumbDown: data.thumb_down,
+                  userReaction: data.userReaction as ReactionState['userReaction'],
+                };
+                setReactionState(fetched);
+                reactionStateRef.current = fetched;
+              }
+            })
+            .catch((err) => console.warn('[Reactions] Failed to fetch initial reactions:', err));
         } else {
           // Server says: this is the next track — start pre-fetching its audio bytes
           // immediately so they're ready in memory before the current track ends.
@@ -403,6 +432,15 @@ export function useRadio(): UseRadioReturn {
           handleTrackEnded();
         } else {
           console.log('[Radio] play_now ignored — already advanced past:', for_track_id);
+        }
+      } else if (msg.event === 'reaction_update') {
+        const d = msg.data as unknown as ReactionUpdateData;
+        if (currentTrackRef.current?.id === d.trackId) {
+          setReactionState((prev) => ({
+            ...prev,
+            thumbUp: d.thumbUp,
+            thumbDown: d.thumbDown,
+          }));
         }
       }
     };
@@ -597,6 +635,29 @@ export function useRadio(): UseRadioReturn {
 
   const closeDjPanel = useCallback(() => setDjPanelOpen(false), []);
 
+  const react = useCallback(async (trackId: string, action: 'thumb_up' | 'thumb_down'): Promise<void> => {
+    try {
+      const res = await fetch(`/api/tracks/${trackId}/react`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        console.error('[Reactions] React failed:', (err as { detail?: string }).detail);
+        return;
+      }
+      const data = await res.json() as { thumb_up: number; thumb_down: number; userReaction: string | null };
+      // Update userReaction from REST response; counts arrive via WS broadcast
+      setReactionState((prev) => ({
+        ...prev,
+        userReaction: data.userReaction as ReactionState['userReaction'],
+      }));
+    } catch (err) {
+      console.error('[Reactions] React network error:', err);
+    }
+  }, []);
+
   const togglePlayPause = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -657,5 +718,7 @@ export function useRadio(): UseRadioReturn {
     claimDj,
     submitDj,
     closeDjPanel,
+    reactionState,
+    react,
   };
 }
