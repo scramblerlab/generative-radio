@@ -69,6 +69,9 @@ class TrackInfo(BaseModel):
     key_scale: str
     duration: int
     audio_url: str  # Proxied URL: /api/audio/{id}
+    dj_name: str = ""            # DJ who generated this track (empty if no DJ session)
+    dj_keywords: list[str] = []  # Keywords chosen by the DJ for this track
+    dj_language: str = ""        # Language chosen by the DJ for this track
 
 
 class RadioStartRequest(BaseModel):
