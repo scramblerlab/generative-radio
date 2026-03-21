@@ -9,7 +9,7 @@ import './App.css';
 type View = 'selector' | 'player';
 
 export default function App() {
-  const [view, setView] = useState<View>('selector');
+  const [view, setView] = useState<View>('player');
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
   const [djName, setDjName] = useState('');
   const radio = useRadio();
@@ -26,7 +26,7 @@ export default function App() {
       // Mid-session: keep current track playing, reschedule next track with new settings
       radio.updateSettings(genres, keywords, language, feeling, advancedOptions);
     } else {
-      await radio.start(genres, keywords, language, feeling, advancedOptions);
+      await radio.start(genres, keywords, language, feeling, advancedOptions, name);
     }
   };
 
@@ -117,8 +117,7 @@ export default function App() {
               onTogglePlayPause={radio.togglePlayPause}
               onSeekBackward={radio.seekBackward}
               onSeekForward={radio.seekForward}
-              onSaveTrack={radio.currentTrack ? () => radio.saveTrack(radio.currentTrack!.id) : undefined}
-              onBack={handleBack}
+onBack={handleBack}
               djUnlockAt={radio.djUnlockAt}
               activeDjName={radio.activeDjName}
               onClaimDj={radio.claimDj}
