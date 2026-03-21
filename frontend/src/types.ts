@@ -19,6 +19,9 @@ export interface Track {
   keyScale: string;
   duration: number;
   audioUrl: string;
+  djName: string;     // DJ who generated this track (empty if no DJ session)
+  djKeywords: string[]; // Keywords chosen by the DJ for this track
+  djLanguage: string;   // Language chosen by the DJ for this track
 }
 
 export interface Genre {

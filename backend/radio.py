@@ -169,9 +169,7 @@ class RadioOrchestrator:
             # First local connection (or re-fill after controller left) → controller
             self._controller_ws = ws
             logger.info(f"[radio] WS connected as CONTROLLER ({ip}) — total: {len(self._ws_connections)}")
-            asyncio.create_task(
-                self._send_to(ws, WSMessage(event="role_assigned", data={"role": "controller"}))
-            )
+            asyncio.create_task(self._send_controller_snapshot(ws))
         else:
             # Remote clients, or when a local controller already exists → viewer
             reason = "remote client" if not is_local else "controller already active"
@@ -186,7 +184,7 @@ class RadioOrchestrator:
         if self.state == RadioState.IDLE and len(self._ws_connections) == 1:
             logger.info("[radio] First client connected to idle radio — auto-starting RANDOM session")
             self._dj_name = "Auto"
-            asyncio.create_task(self.start(["__random__"], [], "en", ""))
+            asyncio.create_task(self.start(["__random__"], ["__random_emotion__", "__random_instrument__"], "en", ""))
 
     def remove_ws(self, ws: WebSocket) -> None:
         if ws in self._ws_connections:
@@ -533,49 +531,27 @@ class RadioOrchestrator:
             logger.warning(f"[radio] Failed to unicast to WS: {e}")
             self.remove_ws(ws)
 
-    async def _send_viewer_snapshot(self, ws: WebSocket) -> None:
-        """Unicast role_assigned:viewer + current session state to a newly connected viewer.
+    async def _send_session_snapshot(self, ws: WebSocket) -> None:
+        """Unicast current session state (track + status) to a newly connected client.
 
-        This ensures late-joining clients see the current track immediately without
-        waiting for the next broadcast cycle.
+        Called for both controller and viewer after role_assigned is sent, so that
+        late-joining clients see the current track immediately without waiting for
+        the next broadcast cycle.
         """
-        await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "viewer"}))
-        await self._send_to(ws, self._make_dj_state_message())
-
-        # Only send state if a session is actually running
         if self.state in (RadioState.IDLE, RadioState.STOPPED):
             return
 
         if self.current_track:
-            ct = self.current_track
             await self._send_to(
                 ws,
                 WSMessage(
                     event="track_ready",
-                    data={
-                        "track": {
-                            "id": ct.id,
-                            "songTitle": ct.song_title,
-                            "genre": ct.genre,
-                            "isRandom": ct.is_random,
-                            "tags": ct.tags,
-                            "lyrics": ct.lyrics,
-                            "bpm": ct.bpm,
-                            "keyScale": ct.key_scale,
-                            "duration": ct.duration,
-                            "audioUrl": ct.audio_url,
-                        },
-                        "isNext": False,
-                    },
+                    data={"track": self._make_track_dict(self.current_track), "isNext": False},
                 ),
             )
 
         if self.state == RadioState.PLAYING:
-            msg = (
-                "Playing — next track ready"
-                if self.next_track
-                else "Playing — generating next track..."
-            )
+            msg = "Playing — next track ready" if self.next_track else "Playing — generating next track..."
         elif self.state == RadioState.GENERATING:
             msg = "Generating your first track..."
         elif self.state == RadioState.BUFFERING:
@@ -587,13 +563,21 @@ class RadioOrchestrator:
             ws,
             WSMessage(
                 event="status",
-                data={
-                    "state": self.state.value,
-                    "message": msg,
-                    "nextReady": self.next_track is not None,
-                },
+                data={"state": self.state.value, "message": msg, "nextReady": self.next_track is not None},
             ),
         )
+
+    async def _send_controller_snapshot(self, ws: WebSocket) -> None:
+        """Unicast role_assigned:controller + current session state to a newly connected controller."""
+        await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "controller"}))
+        await self._send_to(ws, self._make_dj_state_message())
+        await self._send_session_snapshot(ws)
+
+    async def _send_viewer_snapshot(self, ws: WebSocket) -> None:
+        """Unicast role_assigned:viewer + current session state to a newly connected viewer."""
+        await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "viewer"}))
+        await self._send_to(ws, self._make_dj_state_message())
+        await self._send_session_snapshot(ws)
 
     async def _promote_next_controller(self) -> None:
         """Promote the first local viewer to the controller role."""
@@ -948,6 +932,9 @@ class RadioOrchestrator:
             key_scale=song_prompt.key_scale,
             duration=song_prompt.duration,
             audio_url=f"/api/audio/{track_id}",
+            dj_name=dj_name_for_track,
+            dj_keywords=list(self.keywords),
+            dj_language=self.language,
         )
         # Apply DJ name suffix to title if a DJ session is active.
         # History above still uses the raw LLM title so the model's context stays clean.
@@ -1162,8 +1149,8 @@ class RadioOrchestrator:
     # WebSocket broadcast helpers
     # ------------------------------------------------------------------ #
 
-    async def _broadcast_track_ready(self, track: TrackInfo, is_next: bool) -> None:
-        track_dict = {
+    def _make_track_dict(self, track: TrackInfo) -> dict:
+        return {
             "id": track.id,
             "songTitle": track.song_title,
             "genre": track.genre,
@@ -1174,10 +1161,15 @@ class RadioOrchestrator:
             "keyScale": track.key_scale,
             "duration": track.duration,
             "audioUrl": track.audio_url,
+            "djName": track.dj_name,
+            "djKeywords": track.dj_keywords,
+            "djLanguage": track.dj_language,
         }
+
+    async def _broadcast_track_ready(self, track: TrackInfo, is_next: bool) -> None:
         label = "next (pre-buffered)" if is_next else "current (play now)"
         logger.info(f"[radio] Broadcasting track_ready — '{track.song_title}' [{label}]")
-        await self.broadcast(WSMessage(event="track_ready", data={"track": track_dict, "isNext": is_next}))
+        await self.broadcast(WSMessage(event="track_ready", data={"track": self._make_track_dict(track), "isNext": is_next}))
 
     async def _broadcast_status(self, state: str, message: str) -> None:
         logger.debug(f"[radio] Status broadcast: [{state}] {message}")

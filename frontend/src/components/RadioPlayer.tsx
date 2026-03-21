@@ -66,7 +66,6 @@ interface RadioPlayerProps {
   audioDuration?: number | null;
   viewers?: ViewerInfo[];
   sessionInfo?: SessionInfo | null;
-  djName?: string;
   localPaused?: boolean;
   onTogglePlayPause?: () => void;
   onSeekBackward?: () => void;
@@ -74,7 +73,6 @@ interface RadioPlayerProps {
 onBack: () => void;
   // DJ mode
   djUnlockAt: number;
-  activeDjName?: string;
   onClaimDj: () => void;
   // Reactions
   reactionState?: ReactionState;
@@ -104,14 +102,12 @@ export function RadioPlayer({
   audioDuration,
   viewers = [],
   sessionInfo,
-  djName = '',
   localPaused = false,
   onTogglePlayPause,
   onSeekBackward,
   onSeekForward,
   onBack,
   djUnlockAt,
-  activeDjName,
   onClaimDj,
   reactionState,
   onReact,
@@ -331,32 +327,32 @@ const isPlaying = status === 'playing';
         )}
 
         {/* DJ Info — visible to all users when a DJ session is active */}
-        {(activeDjName || djName) && track && (
+        {track?.djName && (
           <div className="player__dj-info">
             <h3 className="player__dj-info-heading">DJ Info</h3>
             <div className="player__dj-info-row">
               <span className="player__dj-info-label">Name</span>
-              <span className="player__dj-info-value">{activeDjName || djName}</span>
+              <span className="player__dj-info-value">{track.djName}</span>
             </div>
-            {sessionInfo?.genre && (
+            {track.genre && (
               <div className="player__dj-info-row">
                 <span className="player__dj-info-label">Genre</span>
                 <span className="player__dj-info-value">
-                  {sessionInfo.isRandom ? `Random · ${sessionInfo.genre}` : sessionInfo.genre}
+                  {track.isRandom ? `Random · ${track.genre}` : track.genre}
                 </span>
               </div>
             )}
-            {sessionInfo && sessionInfo.keywords.length > 0 && (
+            {track.djKeywords.length > 0 && (
               <div className="player__dj-info-row">
                 <span className="player__dj-info-label">Keywords</span>
-                <span className="player__dj-info-value">{sessionInfo.keywords.join(' · ')}</span>
+                <span className="player__dj-info-value">{track.djKeywords.join(' · ')}</span>
               </div>
             )}
-            {sessionInfo?.language && (
+            {track.djLanguage && (
               <div className="player__dj-info-row">
                 <span className="player__dj-info-label">Language</span>
                 <span className="player__dj-info-value">
-                  {sessionInfo.language === 'instrumental' ? 'Instrumental' : sessionInfo.language.toUpperCase()}
+                  {track.djLanguage === 'instrumental' ? 'Instrumental' : track.djLanguage.toUpperCase()}
                 </span>
               </div>
             )}

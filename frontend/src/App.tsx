@@ -11,7 +11,6 @@ type View = 'selector' | 'player';
 export default function App() {
   const [view, setView] = useState<View>('player');
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
-  const [djName, setDjName] = useState('');
   const radio = useRadio();
 
   const handleStart = async (
@@ -20,7 +19,6 @@ export default function App() {
   ) => {
     const isRandom = genres[0] === '__random__';
     setSessionInfo({ genre: isRandom ? '' : genres[0] ?? '', keywords, language, isRandom });
-    setDjName(name);
     setView('player');
     if (radio.currentTrack !== null) {
       // Mid-session: keep current track playing, reschedule next track with new settings
@@ -83,14 +81,12 @@ export default function App() {
             listenerCount={radio.listenerCount}
             audioDuration={radio.audioDuration}
             sessionInfo={sessionInfo}
-            djName={djName}
             localPaused={radio.localPaused}
             onTogglePlayPause={radio.togglePlayPause}
             onSeekBackward={radio.seekBackward}
             onSeekForward={radio.seekForward}
             onBack={handleBack}
             djUnlockAt={radio.djUnlockAt}
-            activeDjName={radio.activeDjName}
             onClaimDj={radio.claimDj}
             reactionState={radio.reactionState}
             onReact={radio.currentTrack ? (action) => radio.react(radio.currentTrack!.id, action) : undefined}
@@ -112,15 +108,13 @@ export default function App() {
               audioDuration={radio.audioDuration}
               viewers={radio.viewers}
               sessionInfo={sessionInfo}
-              djName={djName}
               localPaused={radio.localPaused}
               onTogglePlayPause={radio.togglePlayPause}
               onSeekBackward={radio.seekBackward}
               onSeekForward={radio.seekForward}
 onBack={handleBack}
               djUnlockAt={radio.djUnlockAt}
-              activeDjName={radio.activeDjName}
-              onClaimDj={radio.claimDj}
+                onClaimDj={radio.claimDj}
               reactionState={radio.reactionState}
               onReact={radio.currentTrack ? (action) => radio.react(radio.currentTrack!.id, action) : undefined}
             />
