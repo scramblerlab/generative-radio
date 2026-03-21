@@ -71,8 +71,7 @@ interface RadioPlayerProps {
   onTogglePlayPause?: () => void;
   onSeekBackward?: () => void;
   onSeekForward?: () => void;
-  onSaveTrack?: () => Promise<void>;
-  onBack: () => void;
+onBack: () => void;
   // DJ mode
   djUnlockAt: number;
   activeDjName?: string;
@@ -110,7 +109,6 @@ export function RadioPlayer({
   onTogglePlayPause,
   onSeekBackward,
   onSeekForward,
-  onSaveTrack,
   onBack,
   djUnlockAt,
   activeDjName,
@@ -118,8 +116,6 @@ export function RadioPlayer({
   reactionState,
   onReact,
 }: RadioPlayerProps) {
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'error'>('idle');
-  const [showToast, setShowToast] = useState(false);
   // Tick every second so we can recompute the countdown and locked state locally.
   // The server only sends dj_state on discrete events (connect, claim, submit) — it
   // does NOT push an explicit event when the timer expires. So we derive the locked
@@ -139,11 +135,7 @@ export function RadioPlayer({
       ? `${Math.floor(remainingSec / 60)}:${String(remainingSec % 60).padStart(2, '0')}`
       : '';
 
-  // Reset save state when the track changes
-  useEffect(() => {
-    setSaveState('idle');
-  }, [track?.id]);
-  const isPlaying = status === 'playing';
+const isPlaying = status === 'playing';
   const isLoading = status === 'generating' || status === 'buffering' || status === 'connecting';
 
   return (
@@ -155,36 +147,10 @@ export function RadioPlayer({
           <button className="player__back" onClick={onBack} title="Change genres">
             ← Change Genres
           </button>
-          {onSaveTrack && track && (
-            <button
-              className={`player__save-track`}
-              disabled={saveState === 'saving'}
-              title="Save this track's MP3 and metadata to saved_tracks/"
-              onClick={async () => {
-                setSaveState('saving');
-                try {
-                  await onSaveTrack();
-                  setSaveState('idle');
-                  setShowToast(true);
-                  setTimeout(() => setShowToast(false), 3000);
-                } catch {
-                  setSaveState('error');
-                  setTimeout(() => setSaveState('idle'), 2000);
-                }
-              }}
-            >
-              Save Track
-            </button>
-          )}
         </div>
       )}
 
-      {/* Save toast */}
-      {showToast && (
-        <div className="player__save-toast">✓ Track saved</div>
-      )}
-
-      <div className="player__card">
+<div className="player__card">
         {/* Single badge: shows controller prefix for host, genre info for all */}
         {track && (track.genre || !readonly) && (
           <div className="player__controller-badge">
@@ -385,9 +351,7 @@ export function RadioPlayer({
       <StatusBar status={status} message={statusMessage} nextReady={nextReady} listenerCount={listenerCount} />
 
       <p className="player__presented-by">
-        {djName.trim()
-          ? `PRESENTED BY ${djName.trim().toUpperCase()} AND GENERATIVE RADIO`
-          : 'PRESENTED BY GENERATIVE RADIO'}
+          PRESENTED BY GENERATIVE RADIO
       </p>
     </div>
   );

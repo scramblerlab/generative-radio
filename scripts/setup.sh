@@ -114,7 +114,8 @@ if [ ! -d "$ACESTEP_DIR" ]; then
   echo "  Running uv sync..."
   cd "$ACESTEP_DIR" && uv sync && cd "$PROJECT_DIR"
 else
-  echo "  ACE-Step 1.5 found. Skipping clone."
+  echo "  ACE-Step 1.5 found. Pulling latest changes..."
+  cd "$ACESTEP_DIR" && git pull && uv sync && cd "$PROJECT_DIR"
 fi
 
 # ── Backend ────────────────────────────────────────────────────────────────

@@ -180,6 +180,13 @@ class RadioOrchestrator:
         asyncio.create_task(self._broadcast_viewer_list_to_controller())
         asyncio.create_task(self._broadcast_dj_state())
 
+        # Auto-start with RANDOM genre when the first client connects to an idle radio.
+        # This covers both controller and remote-only (viewer) connections.
+        if self.state == RadioState.IDLE and len(self._ws_connections) == 1:
+            logger.info("[radio] First client connected to idle radio — auto-starting RANDOM session")
+            self._dj_name = "Auto"
+            asyncio.create_task(self.start(["__random__"], [], "en", ""))
+
     def remove_ws(self, ws: WebSocket) -> None:
         if ws in self._ws_connections:
             self._ws_connections.remove(ws)
@@ -343,6 +350,7 @@ class RadioOrchestrator:
         self, ws: WebSocket, genres: list[str], keywords: list[str],
         language: str = "en", feeling: str = "",
         advanced_options: dict | None = None,
+        dj_name: str = "",
     ) -> None:
         """Start the radio session — authorised only for the current controller."""
         if ws != self._controller_ws:
@@ -356,7 +364,9 @@ class RadioOrchestrator:
                 ws, WSMessage(event="error", data={"message": "At least one genre is required"})
             )
             return
+        self._dj_name = dj_name.strip()
         await self.start(genres, keywords, language, feeling, advanced_options)
+        await self._broadcast_dj_state()
 
     async def stop_from_ws(self, ws: WebSocket) -> None:
         """Stop the radio session — authorised only for the current controller."""

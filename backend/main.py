@@ -327,6 +327,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     language=event_data.get("language", "en"),
                     feeling=event_data.get("feeling", ""),
                     advanced_options=event_data.get("advancedOptions"),
+                    dj_name=event_data.get("djName", ""),
                 )
             elif event == "stop":
                 await radio.stop_from_ws(websocket)

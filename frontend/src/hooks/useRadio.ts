@@ -32,7 +32,7 @@ export interface UseRadioReturn {
   viewers: ViewerInfo[];
   audioDuration: number | null; // Actual decoded audio duration (seconds); null until loaded
   saveTrack: (trackId: string) => Promise<void>;
-  start: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => Promise<void>;
+  start: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions, djName?: string) => Promise<void>;
   stop: () => Promise<void>;
   updateSettings: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => void;
   audioRef: RefObject<HTMLAudioElement | null>;
@@ -336,16 +336,6 @@ export function useRadio(): UseRadioReturn {
           setNextReady(false);
           setStatus('playing');
 
-          // Viewer receiving their very first track: browser blocks autoplay (no prior
-          // user gesture). Force localPaused=true so PLAY button is shown and play() is
-          // not attempted. After the viewer taps Play, localPausedRef becomes false and
-          // all subsequent track transitions auto-play normally.
-          if (roleRef.current === 'viewer' && currentTrackRef.current === null) {
-            console.log('[Radio] First track for viewer — forcing paused state, waiting for user gesture');
-            setLocalPaused(true);
-            localPausedRef.current = true;
-          }
-
           // On WS reconnect the server snapshot re-sends the current track as isNext=false.
           // If we're already playing that exact track with no error, don't restart —
           // it would pause the audio, revoke the blob URL, and re-fetch unnecessarily.
@@ -546,7 +536,7 @@ export function useRadio(): UseRadioReturn {
   // Public API
   // ------------------------------------------------------------------ //
 
-  const start = useCallback(async (genres: string[], keywords: string[], language: string = 'en', feeling: string = '', advancedOptions?: AdvancedOptions) => {
+  const start = useCallback(async (genres: string[], keywords: string[], language: string = 'en', feeling: string = '', advancedOptions?: AdvancedOptions, djName: string = '') => {
     console.log('[Radio] Starting — genres:', genres, 'keywords:', keywords, 'language:', language, 'feeling:', feeling, 'advanced:', advancedOptions);
     nextTrackRef.current = null;
     clearPreloadBlob();
@@ -579,7 +569,7 @@ export function useRadio(): UseRadioReturn {
 
     // Send start command over WebSocket. The server validates that this client
     // is the controller and responds via broadcast events (status, track_ready, error).
-    sendWS({ event: 'start', data: { genres, keywords, language, feeling, advancedOptions } });
+    sendWS({ event: 'start', data: { genres, keywords, language, feeling, advancedOptions, djName } });
   }, [clearPreloadBlob, clearActiveBlob, sendWS]);
 
   const updateSettings = useCallback((

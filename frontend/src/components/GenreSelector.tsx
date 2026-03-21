@@ -304,9 +304,7 @@ export function GenreSelector({ onStart, onBackToPlayer, currentTrack }: GenreSe
       </section>
 
       <section className="selector__section">
-        <h2 className="selector__section-title">
-          Your name? <span className="optional">(optional)</span>
-        </h2>
+        <h2 className="selector__section-title">Your name</h2>
         <input
           type="text"
           className="feeling-input"
@@ -314,6 +312,7 @@ export function GenreSelector({ onStart, onBackToPlayer, currentTrack }: GenreSe
           value={djName}
           onChange={(e) => setDjName(e.target.value.slice(0, 50))}
           maxLength={50}
+          required
         />
       </section>
 
@@ -486,7 +485,7 @@ export function GenreSelector({ onStart, onBackToPlayer, currentTrack }: GenreSe
         <button
           className="start-button"
           onClick={handleStart}
-          disabled={!selectedGenre && !isRandomGenre}
+          disabled={(!selectedGenre && !isRandomGenre) || !djName.trim()}
         >
           {currentTrack ? 'Update Radio' : 'Start Radio'}
         </button>
