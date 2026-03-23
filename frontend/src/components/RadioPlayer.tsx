@@ -1,37 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
-import { Track, RadioStatus, ActivityEntry, ProgressStage, ViewerInfo, SessionInfo, ReactionState } from '../types';
+import { Track, RadioStatus, ActivityEntry, ViewerInfo, SessionInfo, ReactionState } from '../types';
 import { StatusBar } from './StatusBar';
 
-const STAGE_ICON: Record<ProgressStage, string> = {
-  llm_thinking:    '🎙',
-  llm_done:        '🎵',
-  acestep_start:   '🎹',
-  acestep_progress:'⏳',
-  acestep_done:    '✓',
-};
 
 function ActivityLog({ entries }: { entries: ActivityEntry[] }) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (scrollRef.current) {
+      scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
+    }
   }, [entries.length]);
 
   if (entries.length === 0) return null;
 
-  const visible = entries.slice(-8);
   return (
-    <div className="activity-log">
-      {visible.map((e) => (
-        <div
-          key={e.id}
-          className={`activity-log__entry activity-log__entry--${e.stage}`}
-        >
-          <span className="activity-log__icon">{STAGE_ICON[e.stage] ?? '·'}</span>
-          <span className="activity-log__msg">{e.message}</span>
-        </div>
-      ))}
-      <div ref={bottomRef} />
+    <div className="activity-log" ref={scrollRef}>
+      <span className="activity-log__content">
+        {entries.map((e, i) => (
+          <span key={e.id}>{i > 0 && ' · '}{e.message}</span>
+        ))}
+      </span>
     </div>
   );
 }
@@ -154,6 +143,7 @@ const isPlaying = status === 'playing';
             {track.isRandom
               ? track.genre ? `RANDOM · ${track.genre.toUpperCase()}` : 'RANDOM'
               : track.genre.toUpperCase()}
+            {track.djName && ` (DJ: ${track.djName})`}
           </div>
         )}
 
@@ -287,10 +277,8 @@ const isPlaying = status === 'playing';
           </div>
         )}
 
-        {/* Activity log — shown while generating or buffering */}
-        {(status === 'generating' || status === 'buffering') && (
-          <ActivityLog entries={activityLog} />
-        )}
+        {/* Activity log — always visible */}
+        <ActivityLog entries={activityLog} />
 
         {/* Error */}
         {errorMessage && (
@@ -329,33 +317,14 @@ const isPlaying = status === 'playing';
         {/* DJ Info — visible to all users when a DJ session is active */}
         {track?.djName && (
           <div className="player__dj-info">
-            <h3 className="player__dj-info-heading">DJ Info</h3>
-            <div className="player__dj-info-row">
-              <span className="player__dj-info-label">Name</span>
-              <span className="player__dj-info-value">{track.djName}</span>
-            </div>
-            {track.genre && (
-              <div className="player__dj-info-row">
-                <span className="player__dj-info-label">Genre</span>
-                <span className="player__dj-info-value">
-                  {track.isRandom ? `Random · ${track.genre}` : track.genre}
-                </span>
-              </div>
-            )}
-            {track.djKeywords.length > 0 && (
-              <div className="player__dj-info-row">
-                <span className="player__dj-info-label">Keywords</span>
-                <span className="player__dj-info-value">{track.djKeywords.join(' · ')}</span>
-              </div>
-            )}
-            {track.djLanguage && (
-              <div className="player__dj-info-row">
-                <span className="player__dj-info-label">Language</span>
-                <span className="player__dj-info-value">
-                  {track.djLanguage === 'instrumental' ? 'Instrumental' : track.djLanguage.toUpperCase()}
-                </span>
-              </div>
-            )}
+            <span className="player__dj-info-content">
+              {[
+                track.djName,
+                track.genre ? (track.isRandom ? `Random · ${track.genre}` : track.genre) : null,
+                track.djKeywords.length > 0 ? track.djKeywords.join(' · ') : null,
+                track.djLanguage ? (track.djLanguage === 'instrumental' ? 'Instrumental' : track.djLanguage.toUpperCase()) : null,
+              ].filter(Boolean).join('  ·  ')}
+            </span>
           </div>
         )}
 

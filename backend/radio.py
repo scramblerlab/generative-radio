@@ -936,12 +936,6 @@ class RadioOrchestrator:
             dj_keywords=list(self.keywords),
             dj_language=self.language,
         )
-        # Apply DJ name suffix to title if a DJ session is active.
-        # History above still uses the raw LLM title so the model's context stays clean.
-        if dj_name_for_track:
-            track_info = track_info.model_copy(
-                update={"song_title": f"{track_info.song_title} (DJ: {dj_name_for_track})"}
-            )
 
         self.track_info_cache[track_id] = track_info
 
