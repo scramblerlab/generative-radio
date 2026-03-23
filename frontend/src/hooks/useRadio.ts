@@ -281,6 +281,24 @@ export function useRadio(): UseRadioReturn {
       nextTrackRef.current = null;
       setNextReady(false);
       setStatus('playing');
+      // Reset reaction state for the new track (track_ready won't fire for pre-queued tracks)
+      const resetReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
+      setReactionState(resetReaction);
+      reactionStateRef.current = resetReaction;
+      fetch(`/api/tracks/${next.id}/reactions`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { thumb_up: number; thumb_down: number; userReaction: string | null } | null) => {
+          if (data) {
+            const fetched: ReactionState = {
+              thumbUp: data.thumb_up,
+              thumbDown: data.thumb_down,
+              userReaction: data.userReaction as ReactionState['userReaction'],
+            };
+            setReactionState(fetched);
+            reactionStateRef.current = fetched;
+          }
+        })
+        .catch(() => {});
       playTrack(next);
     } else {
       // Buffering path: waiting for server to send the next track

@@ -825,15 +825,21 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 
 /* Activity log */
 .activity-log {
-  margin: 18px 0 4px;
-  max-height: 180px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  margin: 12px 0 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  white-space: nowrap;
   scrollbar-width: none;
 }
 .activity-log::-webkit-scrollbar { display: none; }
+
+.activity-log__content {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
 
 .activity-log__entry {
   display: flex;
@@ -1115,39 +1121,16 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 
 /* ── DJ Info section ─────────────────────────────────── */
 .player__dj-info {
-  margin-top: 20px;
-  padding-top: 16px;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
 }
+.player__dj-info::-webkit-scrollbar { display: none; }
 
-.player__dj-info-heading {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  margin-bottom: 4px;
-}
-
-.player__dj-info-row {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-}
-
-.player__dj-info-label {
-  font-size: 11px;
-  color: var(--border-2);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  min-width: 62px;
-  flex-shrink: 0;
-}
-
-.player__dj-info-value {
+.player__dj-info-content {
   font-size: 11px;
   color: var(--text-muted);
   text-transform: uppercase;
