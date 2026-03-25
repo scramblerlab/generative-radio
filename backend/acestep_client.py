@@ -206,6 +206,7 @@ class ACEStepClient:
         logger.info(f"[acestep] ── Starting pipeline for '{prompt.song_title}' (lang: {vocal_language}) ──")
         t0 = time.monotonic()
 
+        t_submit = time.monotonic()
         task_id = await self.submit_task(
             prompt, vocal_language=vocal_language,
             time_signature=time_signature,
@@ -217,7 +218,11 @@ class ACEStepClient:
             use_cot_metas=use_cot_metas,
             use_cot_language=use_cot_language,
         )
+        t_submit_done = time.monotonic()
+
+        t_gen = time.monotonic()
         result = await self.poll_task(task_id, song_title=prompt.song_title)
+        t_gen_done = time.monotonic()
 
         # Parse the audio path from the file URL field
         # result["file"] looks like: "/v1/audio?path=%2Ftmp%2Fapi_audio%2Fabc.mp3"
@@ -226,11 +231,16 @@ class ACEStepClient:
         path_param = parse_qs(parsed.query).get("path", [""])[0]
         logger.debug(f"[acestep] '{prompt.song_title}' — audio path: {path_param}")
 
+        t_dl = time.monotonic()
         audio_bytes = await self.get_audio_bytes(path_param, song_title=prompt.song_title)
+        t_dl_done = time.monotonic()
 
         total = time.monotonic() - t0
         logger.info(
-            f"[acestep] ── Pipeline complete for '{prompt.song_title}' "
-            f"— total: {total:.1f}s ──"
+            f"[acestep] ── PERF '{prompt.song_title}': "
+            f"submit={t_submit_done - t_submit:.1f}s | "
+            f"generation(DiT+VAE)={t_gen_done - t_gen:.1f}s | "
+            f"download={t_dl_done - t_dl:.1f}s | "
+            f"total={total:.1f}s ──"
         )
         return audio_bytes, result
