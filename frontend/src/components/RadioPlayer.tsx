@@ -125,9 +125,7 @@ const isPlaying = status === 'playing';
 
   return (
     <div className="player">
-      {readonly ? (
-        <div className="player__viewer-badge">Now Listening</div>
-      ) : (
+      {!readonly && (
         <div className="player__top-bar">
           <button className="player__back" onClick={onBack} title="Change genres">
             ← Change Genres
