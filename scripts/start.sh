@@ -26,7 +26,7 @@ if pgrep -x "ollama" > /dev/null 2>&1; then
   echo "[1/5] Ollama already running."
 else
   echo "[1/5] Starting Ollama..."
-  ollama serve > /tmp/generative-radio-ollama.log 2>&1 &
+  OLLAMA_FLASH_ATTENTION=1 ollama serve > /tmp/generative-radio-ollama.log 2>&1 &
   OLLAMA_PID=$!
   echo "  Ollama PID: $OLLAMA_PID  (log: /tmp/generative-radio-ollama.log)"
   sleep 2
@@ -49,6 +49,10 @@ else
   echo "[2/5] Starting ACE-Step 1.5 API server..."
   cd "$ACESTEP_DIR"
   ACESTEP_LM_BACKEND=mlx \
+  ACESTEP_COMPILE_MODEL=1 \
+  ACESTEP_MLX_VAE_FP16=1 \
+  MLX_METAL_JIT=1 \
+  ACESTEP_DEBUG_STATS=1 \
   TOKENIZERS_PARALLELISM=false \
     uv run acestep-api --host 127.0.0.1 --port 8001 \
     > /tmp/generative-radio-acestep.log 2>&1 &
