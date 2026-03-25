@@ -269,7 +269,11 @@ LYRICS RULES:
 METADATA RULES:
 - BPM range: 30–300. Match the genre naturally (slow 60–80, mid-tempo 90–120, fast 130–180+)
 - BPM and DURATION must be whole integers — no decimal points (e.g. 120, not 120.5)
-- DURATION should be around {target_duration} seconds — it is fine if the actual audio runs slightly shorter or longer to allow a natural ending
+- DURATION: choose based on the genre and composition (minimum 150s, maximum {target_duration}s):
+  - Slow / atmospheric / ambient / orchestral / cinematic → 240–{target_duration}s
+  - Mid-tempo / folk / soul / jazz / R&B / indie → 200–250s
+  - Upbeat / energetic / dance / pop / rock / electronic → 150–200s
+  Let the song structure decide — a natural ending matters more than hitting a specific number.
 
 OUTPUT FORMAT:
 Output ONLY the labeled plain-text format below. Do NOT output JSON, markdown, or code fences.

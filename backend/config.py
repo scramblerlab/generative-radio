@@ -15,7 +15,7 @@ DURATION_SMALL_THRESHOLD_GB = 32  # ≤32 GB → short debug songs
 DURATION_THRESHOLD_GB = 48        # ≥48 GB → full-length progressive songs
 DURATION_SMALL_S = 30             # fast iteration on ≤24 GB dev machines
 DURATION_DEFAULT_S = 60           # standard on 25–47 GB machines
-DURATION_LARGE_S = 180            # safe on ≥48 GB machines (~33 GB MLX VAE buffer)
+DURATION_LARGE_S = 300            # safe on ≥48 GB machines; allows 3–5 min tracks
 
 
 def get_unified_memory_gb() -> int:
