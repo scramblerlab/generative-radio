@@ -1,7 +1,7 @@
 # Apple Silicon Performance Tuning — ACE-Step + Ollama
 
 > Research date: 2026-03-25
-> Tested on: MacBook Air (baseline + Phase B). Mac Mini M4 Pro 64GB retest pending.
+> Tested on: MacBook Air M3 24GB (baseline + Phase B). Mac Mini M4 Pro 64GB (baseline + Phase B + Phase C LM model).
 > Relevant files: `scripts/start.sh`, `scripts/start_prod.sh`, `backend/acestep_client.py`
 
 ---
@@ -190,32 +190,149 @@ The MacBook Air data is for 30s tracks. On Mac Mini with 180s tracks:
 
 ---
 
-## Mac Mini Retest (to be filled in)
+## Mac Mini M4 Pro 64GB — Baseline (before Phase B)
 
-**Test procedure:**
+ACE-Step init at baseline:
+```
+[MLX-DiT] Native MLX DiT decoder initialized successfully (mx.compile=False).
+[MLX-VAE] Native MLX VAE initialized (dtype=mlx.core.float32, compiled=True).
+```
 
-1. Ensure Phase B changes are in place (`scripts/start.sh` already updated)
-2. Kill and restart ACE-Step to pick up new env vars:
-   ```bash
-   kill $(lsof -ti tcp:8001)
-   ./scripts/start.sh   # or start_prod.sh
-   ```
-3. Generate 4–5 tracks with no long idle gaps
-4. Run the measurement commands:
-   ```bash
-   grep -E "LLM done|PERF" /tmp/generative-radio-backend.log
-   grep -iE "dit|vae|stat|elapsed|seconds" /tmp/generative-radio-acestep.log
-   ```
-5. Verify ACE-Step init lines confirm `mx.compile=True` and `dtype=mlx.core.float16`
-6. Record T2–T4 averages (exclude T1 warmup) in the table below
+Note: `offload_time_cost=0.0` on all tracks — Mac Mini 64GB keeps all models in GPU memory, no CPU offload (vs ~8–12s overhead on MacBook Air 24GB).
 
-| Stage | Baseline (reported ~120s total) | Phase B avg | Delta | % |
+| Stage | T1 'Velvet Strings In Rain' | T2 'Rebel Rhythm In Golden Notes' | T3 'Neon Breath On Skyline' | T4 'Silent Notes Drifting East' | **Avg T2–T4** |
+|---|---|---|---|---|---|
+| Ollama LLM | 24.5s | 25.1s | 22.2s | 22.8s | **23.4s** |
+| **DiT diffusion** | **23.3s** | **29.1s** | **27.7s** | **27.8s** | **28.2s** |
+| CPU offload overhead | 0.0s | 0.0s | 0.0s | 0.0s | 0.0s |
+| **VAE decode** | **13.5s** | **12.4s** | **11.0s** | **10.7s** | **11.4s** |
+| **ACE-Step client total** | **116.2s** | **122.2s** | **120.2s** | **114.2s** | **118.9s** |
+| **Wall time (LLM + ACE-Step)** | **~141s** | **~147s** | **~142s** | **~137s** | **~142s** |
+
+---
+
+## Mac Mini M4 Pro 64GB — Phase B Results
+
+ACE-Step init confirms both active:
+```
+[MLX-DiT] Native MLX DiT decoder initialized successfully (mx.compile=True).   ← was False ✓
+[MLX-VAE] Model weights converted to float16.                                   ← new ✓
+[MLX-VAE] Native MLX VAE initialized (dtype=mlx.core.float16, compiled=True).  ← was float32 ✓
+```
+
+| Stage | T1 'Iron & Ash' (warmup) | T2 'Neon Revolt In The Library' | T3 'Highland Banner Rise' | T4 'Voltage Bloom In The Smelt' | **Avg T2–T4** |
+|---|---|---|---|---|---|
+| Ollama LLM | 23.7s | 24.2s | 22.0s | 24.2s | **23.5s** |
+| **DiT diffusion** | **28.1s** | **25.0s** | **26.8s** | **27.4s** | **26.4s** |
+| CPU offload overhead | 0.0s | 0.0s | 0.0s | 0.0s | 0.0s |
+| **VAE decode** | **12.1s** | **11.6s** | **9.5s** | **9.5s** | **10.2s** |
+| **ACE-Step client total** | **116.2s** | **120.2s** | **112.2s** | **118.2s** | **116.9s** |
+| **Wall time (LLM + ACE-Step)** | **~140s** | **~144s** | **~134s** | **~142s** | **~140s** |
+
+---
+
+## Baseline vs Phase B — Mac Mini M4 Pro 64GB, 180s tracks
+
+| Stage | Baseline avg | Phase B avg (T2–T4) | Delta | % |
 |---|---|---|---|---|
-| Ollama LLM | TBD | TBD | TBD | TBD |
-| DiT diffusion | TBD | TBD | TBD | TBD |
-| VAE decode | TBD | TBD | TBD | TBD |
-| ACE-Step total | TBD | TBD | TBD | TBD |
-| **Wall time total** | **~120s** | **TBD** | **TBD** | **TBD** |
+| Ollama LLM | 23.4s | 23.5s | 0.0s | ~0% |
+| DiT diffusion | 28.2s | 26.4s | -1.8s | -6% |
+| VAE decode | 11.4s | 10.2s | -1.2s | -11% |
+| ACE-Step total | 118.9s | 116.9s | -2.0s | -2% |
+| **Wall time total** | **~142s** | **~140s** | **-2s** | **-1%** |
+
+### Observations
+
+- **Phase B improvements are minimal on Mac Mini.** DiT and VAE are faster, but only by ~1–2s each. The environment variables still provide a free improvement with no downsides, so they remain enabled.
+- **The real bottleneck is LM phase (audio token generation).** DiT+VAE together is only ~37s of the ~117s ACE-Step total. The remaining ~80s is LM Phase 1 (CoT metadata) + Phase 2 (audio token generation) + prompt embedding. For 180s tracks, ACE-Step must generate ~6× more audio tokens than for 30s tracks, so LM generation time dominates.
+- **No CPU offload overhead** — 64GB unified memory keeps all models resident in GPU. MacBook Air 24GB had ~8–12s offload overhead per track.
+- **T1 warmup effect is subtle.** T1 DiT (28.1s) is similar to T2–T4 levels — `mx.compile` warmup cost is masked by the larger LM phase in the total wall time.
+
+---
+
+## Phase C — LM Model Downgrade (4B → 1.7B)
+
+### Background
+
+After Phase B, the per-track sub-phase breakdown revealed that **Phase 2 (audio code generation) was ~55% of total ACE-Step time** — 64.5s of 116.9s. Phase B (DiT/VAE flags) had no impact on this. The bottleneck is LM token generation speed.
+
+ACE-Step auto-selects `acestep-5Hz-lm-4B` for machines with ≥24GB unified memory (`tier=unlimited`). The 4B model generates 900 audio codes at ~14 tok/s. The 1.7B model is available on disk and can be forced via `ACESTEP_LM_MODEL_PATH`.
+
+### Change
+
+**`scripts/start.sh` and `scripts/start_prod.sh`** — added to ACE-Step launch block:
+```bash
+ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-1.7B \
+```
+
+### Phase C Results — Mac Mini M4 Pro 64GB, 180s tracks
+
+LM model confirmed: `[API Server] LLM model loaded: acestep-5Hz-lm-1.7B`
+
+| Stage | T1 'Flute Fortress' (warmup) | T2 'Harp Echoes At Suncity' | T3 'Gear Shift Rhythm' | T4 'Hollow Bell Rising' | **Avg T2–T4** |
+|---|---|---|---|---|---|
+| Ollama LLM | 24.2s | 23.5s | 27.2s | 23.6s | **24.8s** |
+| Phase 1 — CoT metadata | 3.88s | 4.25s | 3.27s | 3.99s | **3.8s** |
+| Phase 2 — 900 audio codes | 28.61s | 28.83s | 28.99s | 28.62s | **28.8s** |
+| **DiT diffusion** | **24.9s** | **27.2s** | **25.1s** | **25.7s** | **26.0s** |
+| **VAE decode** | **10.6s** | **9.9s** | **9.8s** | **10.1s** | **9.9s** |
+| **ACE-Step client total** | **76.1s** | **74.1s** | **72.4s** | **72.1s** | **72.9s** |
+| **Wall time (LLM + ACE-Step)** | **~100s** | **~98s** | **~100s** | **~96s** | **~98s** |
+
+### Phase B vs Phase C — Mac Mini M4 Pro 64GB
+
+| Stage | Phase B (4B LM) | Phase C (1.7B LM) | Delta | % |
+|---|---|---|---|---|
+| Ollama LLM | 23.5s | 24.8s | +1.3s | +6% |
+| Phase 1 — CoT metadata | 10.1s | 3.8s | **-6.3s** | **-62%** |
+| Phase 2 — 900 audio codes | 64.5s | 28.8s | **-35.7s** | **-55%** |
+| DiT diffusion | 26.4s | 26.0s | -0.4s | ~0% |
+| VAE decode | 10.2s | 9.9s | -0.3s | ~0% |
+| ACE-Step total | 116.9s | 72.9s | **-44.0s** | **-38%** |
+| **Wall time total** | **~140s** | **~98s** | **-42s** | **-30%** |
+
+### Observations
+
+- **Phase 2 halved:** 1.7B generates 900 codes at ~31 tok/s vs 4B at ~14 tok/s — consistent with the ~2.4× parameter ratio.
+- **Phase 2 variance dropped to near-zero:** 28.61–28.99s across all 4 tracks. Highly deterministic for this model+duration combination.
+- **DiT and VAE unchanged** — as expected, the LM model switch has no effect on diffusion.
+- **No audible quality degradation observed** in listening tests on Mac Mini. The 1.7B model produces coherent, varied tracks with proper structure. Quality difference vs 4B may be subtle for ambient/instrumental genres.
+- **Wall time now well under track duration:** 180s track generated in ~98s → 82s of headroom before the track ends. This makes pipelined pre-generation straightforward if needed in future.
+- **This is the current production configuration** for Mac Mini M4 Pro 64GB.
+
+---
+
+## Mac Mini M4 Pro 64GB — Full Progression
+
+| Configuration | Wall time avg | vs Baseline | Notes |
+|---|---|---|---|
+| Baseline (no Phase B, 4B LM) | ~142s | — | Auto-selected 4B, no compile flags |
+| Phase B (compile + FP16, 4B LM) | ~140s | -2s (-1%) | DiT/VAE flags, LM was the bottleneck |
+| **Phase C (compile + FP16, 1.7B LM)** | **~98s** | **-44s (-31%)** | **Current config** |
+
+---
+
+## Machine Comparison — MacBook Air M3 24GB vs Mac Mini M4 Pro 64GB
+
+Comparing Phase B steady-state (T2–T4 avg) across machines. Different track durations make direct comparison tricky — the table includes per-second-of-audio normalization where useful.
+
+| Stage | MacBook Air M3 24GB (30s tracks) | Mac Mini M4 Pro 64GB (180s tracks) | Notes |
+|---|---|---|---|
+| Ollama LLM | 31.3s | 23.5s | **Mac Mini 25% faster** — M4 Pro CPU + Flash Attention likely both contributing |
+| DiT diffusion | 16.1s | 26.4s | Mac Mini slower in absolute time, but generating 6× longer audio. Per-second: Air=0.54s/s, Mini=0.15s/s — **Mac Mini 3.7× more efficient** |
+| VAE decode | 3.8s | 10.2s | Same pattern. Per-second: Air=0.13s/s, Mini=0.057s/s — **Mac Mini 2.3× more efficient** |
+| CPU offload overhead | 8.3s | 0.0s | **Mac Mini: eliminated entirely** — 64GB keeps all models in GPU |
+| ACE-Step total | 66.8s | 116.9s | Longer audio, but LM phase dominates on Mac Mini |
+| **Wall time total** | **~98s** | **~140s** | Mac Mini generates 6× longer audio in only 1.4× the time |
+| **Audio output per minute of generation** | **~18s audio/min** | **~77s audio/min** | **Mac Mini delivers 4.3× more audio per unit time** |
+
+### Key takeaways
+
+- **Mac Mini is dramatically more capable per unit time** — generating 180s tracks at 4.3× the audio throughput of MacBook Air on 30s tracks.
+- **M4 Pro architecture advantage is clear in DiT and VAE** — per second of audio generated, Mac Mini is 2–4× more efficient. More GPU cores + higher memory bandwidth.
+- **Ollama LLM is faster on Mac Mini in absolute terms** (23.5s vs 31.3s) despite both using the same Qwen3.5:4b model — M4 Pro CPU and memory bandwidth advantage.
+- **The optimization headroom is different between machines.** On MacBook Air, DiT+VAE was ~30% of wall time and Phase B cut it significantly. On Mac Mini, DiT+VAE is only ~26% of wall time — LM token generation is the ceiling to break next.
+- **Phase C addressed the LM bottleneck** by switching to 1.7B, cutting wall time from ~140s to ~98s. The Mac Mini now generates 180s of audio in ~98s — well under the track duration, giving 82s of pre-generation headroom.
 
 ---
 
