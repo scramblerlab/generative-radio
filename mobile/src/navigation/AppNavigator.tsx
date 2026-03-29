@@ -51,31 +51,39 @@ export function AppNavigator({ radio }: Props) {
     updateSettings(genres, keywords, language, feeling, advancedOptions);
   };
 
-  // Viewer: always show player (read-only)
+  // Viewer: always show player (read-only except DJ — everyone can be DJ)
   if (!isController) {
     return (
       <NavigationContainer>
-        <RadioPlayer
-          readonly
-          track={currentTrack}
-          status={status}
-          nextReady={nextReady}
-          statusMessage={statusMessage}
-          errorMessage={errorMessage}
-          activityLog={activityLog}
-          progress={progress}
-          audioDuration={audioDuration}
-          listenerCount={listenerCount}
-          localPaused={localPaused}
-          djLocked={djLocked}
-          djUnlockAt={djUnlockAt}
-          activeDjName={activeDjName}
-          reactionState={reactionState}
-          onTogglePlayPause={togglePlayPause}
-          onSeekBackward={seekBackward}
-          onSeekForward={seekForward}
-          onReact={react}
-        />
+        <>
+          <RadioPlayer
+            readonly
+            track={currentTrack}
+            status={status}
+            nextReady={nextReady}
+            statusMessage={statusMessage}
+            errorMessage={errorMessage}
+            activityLog={activityLog}
+            progress={progress}
+            audioDuration={audioDuration}
+            listenerCount={listenerCount}
+            localPaused={localPaused}
+            djLocked={djLocked}
+            djUnlockAt={djUnlockAt}
+            activeDjName={activeDjName}
+            reactionState={reactionState}
+            onTogglePlayPause={togglePlayPause}
+            onSeekBackward={seekBackward}
+            onSeekForward={seekForward}
+            onClaimDj={claimDj}
+            onReact={react}
+          />
+          <DJPanel
+            visible={djPanelOpen}
+            onSubmit={submitDj}
+            onClose={closeDjPanel}
+          />
+        </>
       </NavigationContainer>
     );
   }

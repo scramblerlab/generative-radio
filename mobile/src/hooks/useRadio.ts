@@ -6,6 +6,7 @@ import TrackPlayer, {
   State,
   useTrackPlayerEvents,
   Capability,
+  IOSCategory,
 } from 'react-native-track-player';
 import {
   Track,
@@ -135,6 +136,13 @@ export function useRadio(): UseRadioReturn {
     let mounted = true;
     TrackPlayer.setupPlayer({
       maxCacheSize: 1024 * 5, // 5 MB cache
+      // Keep the audio session alive when the screen is locked or the app is
+      // backgrounded. IOSCategory.Playback is RNTP's default but explicit here
+      // for clarity. autoHandleInterruptions ensures RNTP automatically resumes
+      // after interruptions (phone calls, Siri, notification sounds) instead of
+      // leaving playback permanently stopped.
+      iosCategory: IOSCategory.Playback,
+      autoHandleInterruptions: true,
     }).then(() => {
       if (!mounted) return;
       TrackPlayer.updateOptions({
