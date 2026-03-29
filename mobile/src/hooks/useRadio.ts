@@ -107,6 +107,11 @@ export function useRadio(): UseRadioReturn {
   // nextTrackRef being set just means we received track_ready — the download
   // may still be in-flight. nextQueuedRef confirms it's in RNTP's queue.
   const nextQueuedRef = useRef(false);
+  // Set to true by PlaybackQueueEnded (queue exhausted), cleared by playTrack.
+  // Used in prefetchNextTrack to decide kick-start vs queue — cannot use RNTP
+  // state because autoHandleInterruptions puts RNTP into 'loading' spuriously
+  // between tracks, making rntpActive look true when the queue is actually empty.
+  const queueEndedRef = useRef(false);
 
   // ------------------------------------------------------------------ //
   // Audio download helper — mirrors web app's Blob URL pre-fetch.
@@ -248,17 +253,15 @@ export function useRadio(): UseRadioReturn {
   useTrackPlayerEvents([Event.PlaybackQueueEnded], () => {
     // Queue fully exhausted. Two cases require recovery:
     // 1. No next track at all — normal gap between tracks.
-    // 2. nextTrackRef is set but nextQueuedRef is false — download was suspended
-    //    by iOS in background and never completed, so TrackPlayer.add() was never
-    //    called. The ref is set but the queue is empty.
+    // 2. nextTrackRef is set but nextQueuedRef is false — download was in-flight
+    //    when the track ended, so TrackPlayer.add() was never called.
+    console.log('[RNTP] Queue ended — nextTrack:', nextTrackRef.current?.songTitle ?? 'none', '/ queued:', nextQueuedRef.current);
+    queueEndedRef.current = true;
     if (!nextTrackRef.current || !nextQueuedRef.current) {
-      console.log('[RNTP] Queue ended — nextTrack:', nextTrackRef.current?.songTitle ?? 'none', '/ queued:', nextQueuedRef.current);
-//      nextTrackRef.current = null;
       nextQueuedRef.current = false;
       setNextReady(false);
       setStatus('buffering');
       setStatusMessage('Buffering next track...');
-//      sendWS({ event: 'track_ended' });
     }
   });
 
@@ -287,6 +290,7 @@ export function useRadio(): UseRadioReturn {
 
   const playTrack = useCallback(async (track: Track) => {
     console.log('[Audio] Playing track:', track.songTitle);
+    queueEndedRef.current = false;
     setCurrentTrack(track);
     currentTrackRef.current = track;
     setProgress(0);
@@ -334,36 +338,30 @@ export function useRadio(): UseRadioReturn {
         console.log('[Audio] Prefetch completed but track superseded — discarding:', track.songTitle);
         return;
       }
-      await TrackPlayer.add({
-        id: track.id,
-        url: localUri,
-        title: track.songTitle,
-        artist: track.genre,
-        album: 'Generative Radio',
-        duration: track.duration,
-      });
-      nextQueuedRef.current = true;
-      console.log('[Audio] Next track cached and queued:', track.songTitle);
-
-      // If RNTP stopped while the download was in-flight (the current track ended
-      // before prefetch completed), kick-start the newly queued track immediately
-      // rather than waiting for play_now watchdog (which fires after 150-300 s).
-      const rntpState = await TrackPlayer.getState();
-      const rntpActive = rntpState === State.Playing
-        || rntpState === State.Buffering
-        || rntpState === State.Loading;
-      if (!rntpActive && !localPausedRef.current) {
-        console.log('[Audio] Player stopped after late prefetch — kick-starting');
-        try {
-          const queue = await TrackPlayer.getQueue();
-          if (queue.length > 1) {
-            // Ended track still occupies index 0 — skip to the newly added track
-            await TrackPlayer.skip(queue.length - 1);
-          }
-          await TrackPlayer.play();
-        } catch (e) {
-          console.error('[Audio] Kick-start after late prefetch failed:', e);
-        }
+      // Use queueEndedRef (set by PlaybackQueueEnded) to decide kick-start vs queue.
+      // Cannot use RNTP state: autoHandleInterruptions fires a spurious 'loading'
+      // between tracks, making the state look active when the queue is actually empty.
+      if (queueEndedRef.current && !localPausedRef.current) {
+        // Queue ended while download was in-flight — full reset so audio session
+        // is reactivated cleanly (skip+play into a broken session fails).
+        console.log('[Audio] Late prefetch — queue already ended, resetting and playing directly:', track.songTitle);
+        nextTrackRef.current = null;
+        nextQueuedRef.current = false;
+        setNextReady(false);
+        setStatus('playing');
+        await playTrack(track);
+      } else {
+        // Current track still playing — queue for auto-advance
+        await TrackPlayer.add({
+          id: track.id,
+          url: localUri,
+          title: track.songTitle,
+          artist: track.genre,
+          album: 'Generative Radio',
+          duration: track.duration,
+        });
+        nextQueuedRef.current = true;
+        console.log('[Audio] Next track cached and queued:', track.songTitle);
       }
     } catch (err) {
       console.error('[Audio] prefetchNextTrack failed:', err);
@@ -430,7 +428,7 @@ export function useRadio(): UseRadioReturn {
             // WS was dead and the backend hasn't caught up yet.
             // If RNTP is stopped/idle (queue exhausted normally), fall through to playTrack()
             // so we don't send a spurious track_ended that skips the incoming track.
-            const rtpState = await TrackPlayer.getState();
+            const rtpState = (await TrackPlayer.getPlaybackState()).state;
             const isRntpPlaying = rtpState === State.Playing
               || rtpState === State.Buffering
               || rtpState === State.Loading;
@@ -486,7 +484,7 @@ export function useRadio(): UseRadioReturn {
         // track_ended (which would just loop).
         const d = msg.data as unknown as { track: Track };
         if (!localPausedRef.current) {
-          const rtpState = await TrackPlayer.getState();
+          const rtpState = (await TrackPlayer.getPlaybackState()).state;
           const isPlaying = rtpState === State.Playing
             || rtpState === State.Buffering
             || rtpState === State.Loading;
@@ -578,7 +576,7 @@ export function useRadio(): UseRadioReturn {
       if (nextState !== 'active') return;
       if (localPausedRef.current) return;
       try {
-        const state = await TrackPlayer.getState();
+        const state = (await TrackPlayer.getPlaybackState()).state;
         console.log('[Audio] App foregrounded — RNTP state:', state);
         if (state !== State.Playing && playerReadyRef.current) {
           console.log('[Audio] Resuming playback after foreground');
@@ -680,7 +678,7 @@ export function useRadio(): UseRadioReturn {
   const togglePlayPause = useCallback(async () => {
     if (!playerReadyRef.current) return;
     try {
-      const state = await TrackPlayer.getState();
+      const state = (await TrackPlayer.getPlaybackState()).state;
       if (state === State.Playing) {
         await TrackPlayer.pause();
         setLocalPaused(true);
