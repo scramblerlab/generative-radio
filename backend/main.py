@@ -316,7 +316,9 @@ async def websocket_endpoint(websocket: WebSocket):
             event = data.get("event")
             logger.debug(f"[main] WS message received: {event}")
 
-            if event == "track_ended":
+            if event == "ping":
+                pass  # keep-alive heartbeat from mobile clients, no action needed
+            elif event == "track_ended":
                 await radio.on_track_ended()
             elif event == "start":
                 event_data = data.get("data", {})

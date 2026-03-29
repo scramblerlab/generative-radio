@@ -98,6 +98,7 @@ export function useRadio(): UseRadioReturn {
   const localPausedRef = useRef<boolean>(true);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelay = useRef(RECONNECT_BASE_MS);
+  const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isActiveRef = useRef(false);
   const playerReadyRef = useRef(false);
 
@@ -315,6 +316,15 @@ export function useRadio(): UseRadioReturn {
     ws.onopen = () => {
       console.log('[WS] Connection established');
       reconnectDelay.current = RECONNECT_BASE_MS;
+      // Keep-alive ping every 25 s — iOS kills idle TCP connections in background
+      // even with UIBackgroundModes:audio. Without this the WS silently dies and
+      // track_ended is never delivered, stalling the radio loop.
+      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ event: 'ping' }));
+        }
+      }, 25_000);
     };
 
     ws.onmessage = (event: MessageEvent) => {
@@ -334,29 +344,45 @@ export function useRadio(): UseRadioReturn {
       } else if (msg.event === 'track_ready') {
         const { track, isNext } = msg.data as unknown as TrackReadyData;
         if (!isNext) {
-          console.log('[Radio] track_ready (current):', track.songTitle);
-          nextTrackRef.current = null;
-          setNextReady(false);
-          setStatus('playing');
-          playTrack(track);
-          // Fetch reactions for this track
-          const resetReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
-          setReactionState(resetReaction);
-          reactionStateRef.current = resetReaction;
-          fetch(`${BACKEND_URL}/api/tracks/${track.id}/reactions`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data: { thumb_up: number; thumb_down: number; userReaction: string | null } | null) => {
-              if (data) {
-                const fetched: ReactionState = {
-                  thumbUp: data.thumb_up,
-                  thumbDown: data.thumb_down,
-                  userReaction: data.userReaction as ReactionState['userReaction'],
-                };
-                setReactionState(fetched);
-                reactionStateRef.current = fetched;
-              }
-            })
-            .catch(() => {});
+          const alreadyPlayingId = currentTrackRef.current?.id;
+
+          if (alreadyPlayingId === track.id) {
+            // WS reconnected mid-track — RNTP is already playing this track; skip reset.
+            // Mirrors the duplicate-protection in the web hook.
+            console.log('[Radio] track_ready (current) — already playing, skip reset:', track.songTitle);
+            setStatus('playing');
+          } else if (alreadyPlayingId && alreadyPlayingId !== track.id) {
+            // RNTP auto-advanced while WS was dead; backend hasn't caught up yet.
+            // Re-sync by sending track_ended so the backend loop advances to match us.
+            console.log('[Radio] WS reconnect: RNTP ahead of backend, sending track_ended to sync');
+            sendWS({ event: 'track_ended' });
+            setStatus('playing');
+          } else {
+            // No current track — normal first-play flow.
+            console.log('[Radio] track_ready (current):', track.songTitle);
+            nextTrackRef.current = null;
+            setNextReady(false);
+            setStatus('playing');
+            playTrack(track);
+            // Fetch reactions for this track
+            const resetReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
+            setReactionState(resetReaction);
+            reactionStateRef.current = resetReaction;
+            fetch(`${BACKEND_URL}/api/tracks/${track.id}/reactions`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((data: { thumb_up: number; thumb_down: number; userReaction: string | null } | null) => {
+                if (data) {
+                  const fetched: ReactionState = {
+                    thumbUp: data.thumb_up,
+                    thumbDown: data.thumb_down,
+                    userReaction: data.userReaction as ReactionState['userReaction'],
+                  };
+                  setReactionState(fetched);
+                  reactionStateRef.current = fetched;
+                }
+              })
+              .catch(() => {});
+          }
         } else {
           console.log('[Radio] track_ready (next, pre-queuing):', track.songTitle);
           nextTrackRef.current = track;
@@ -392,20 +418,6 @@ export function useRadio(): UseRadioReturn {
       } else if (msg.event === 'dj_claim_ack') {
         const { granted } = msg.data as unknown as DjClaimAckData;
         if (granted) setDjPanelOpen(true);
-      } else if (msg.event === 'play_now') {
-        const { for_track_id } = msg.data as { for_track_id: string };
-        if (currentTrackRef.current?.id === for_track_id) {
-          console.log('[Radio] play_now watchdog — forcing track transition');
-          // Force advance: signal backend and let RNTP queue handle playback
-          sendWS({ event: 'track_ended' });
-          if (nextTrackRef.current) {
-            const next = nextTrackRef.current;
-            nextTrackRef.current = null;
-            setNextReady(false);
-            setStatus('playing');
-            playTrack(next);
-          }
-        }
       } else if (msg.event === 'reaction_update') {
         const d = msg.data as unknown as ReactionUpdateData;
         if (currentTrackRef.current?.id === d.trackId) {
@@ -415,6 +427,10 @@ export function useRadio(): UseRadioReturn {
     };
 
     ws.onclose = () => {
+      if (pingIntervalRef.current) {
+        clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = null;
+      }
       if (isActiveRef.current && wsRef.current === ws) {
         const delay = reconnectDelay.current;
         console.log(`[WS] Closed — reconnecting in ${delay}ms`);
