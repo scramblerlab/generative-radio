@@ -132,16 +132,26 @@ export function useRadio(): UseRadioReturn {
       return localUri;
     }
     const url = `${BACKEND_URL}${track.audioUrl}`;
-    console.log('[Audio] Downloading to cache:', track.songTitle, '—', url);
+    const localPath = localUri.replace('file://', '');
     // Use react-native-blob-util with IOSBackgroundTask: true so iOS schedules
     // this as a proper background URLSession transfer — not throttled like
     // FileSystem.downloadAsync which uses a random-UUID background session.
-    await RNBlobUtil.config({
-      path: localUri.replace('file://', ''),
-      IOSBackgroundTask: true,
-    }).fetch('GET', url);
-    console.log('[Audio] Download complete:', track.songTitle);
-    return localUri;
+    // Retry once: RNBlobUtil writes directly to the destination path (no atomic
+    // temp→move), so a failed download leaves a partial file. Delete it before
+    // retrying to prevent the cache-hit check from returning a broken file.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        console.log(`[Audio] Downloading to cache (attempt ${attempt}):`, track.songTitle, '—', url);
+        await RNBlobUtil.config({ path: localPath, IOSBackgroundTask: true }).fetch('GET', url);
+        console.log('[Audio] Download complete:', track.songTitle);
+        return localUri;
+      } catch (err) {
+        console.warn(`[Audio] Download attempt ${attempt} failed:`, err);
+        try { await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch {}
+        if (attempt === 2) throw err;
+      }
+    }
+    throw new Error('unreachable');
   }, []);
 
   // ------------------------------------------------------------------ //
@@ -380,8 +390,30 @@ export function useRadio(): UseRadioReturn {
       }
     } catch (err) {
       console.error('[Audio] prefetchNextTrack failed:', err);
+      // Clean up any partial file so cache-hit check won't return a broken URI.
+      try {
+        const localUri = `${FileSystem.documentDirectory}track_${track.id}.mp3`;
+        await FileSystem.deleteAsync(localUri, { idempotent: true });
+      } catch {}
+      // If the queue already ended while the download was failing, signal the
+      // backend to advance — play_now or track_ready will trigger fresh recovery.
+      if (queueEndedRef.current) {
+        console.log('[Audio] Download failed and queue ended — requesting next track');
+        nextTrackRef.current = null;
+        nextQueuedRef.current = false;
+        queueEndedRef.current = false;
+        setNextReady(false);
+        setStatus('buffering');
+        sendWS({ event: 'track_ended' });
+      } else {
+        // Queue still has a current track — just clear the stale next-track ref
+        // so a future track_ready(next) can start fresh.
+        nextTrackRef.current = null;
+        nextQueuedRef.current = false;
+        setNextReady(false);
+      }
     }
-  }, [downloadAudio]);
+  }, [downloadAudio, sendWS]);
 
   // ------------------------------------------------------------------ //
   // WebSocket connection
