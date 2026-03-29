@@ -362,6 +362,21 @@ export function useRadio(): UseRadioReturn {
         });
         nextQueuedRef.current = true;
         console.log('[Audio] Next track cached and queued:', track.songTitle);
+
+        // Recovery: if RNTP errored during a track transition (audio session failure)
+        // the queued track won't auto-play. Full reset re-activates the session cleanly.
+        const postAddState = (await TrackPlayer.getPlaybackState()).state;
+        const isInactive = (postAddState as string) === 'error'
+          || postAddState === State.None
+          || postAddState === State.Stopped;
+        if (isInactive && !localPausedRef.current) {
+          console.log('[Audio] RNTP inactive after queue add (state:', postAddState, ') — recovering');
+          nextTrackRef.current = null;
+          nextQueuedRef.current = false;
+          setNextReady(false);
+          setStatus('playing');
+          await playTrack(track);
+        }
       }
     } catch (err) {
       console.error('[Audio] prefetchNextTrack failed:', err);
