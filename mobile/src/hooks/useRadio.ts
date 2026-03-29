@@ -272,6 +272,12 @@ export function useRadio(): UseRadioReturn {
       setNextReady(false);
       setStatus('buffering');
       setStatusMessage('Buffering next track...');
+      // Let's assume if !nextTrackRef.current, backend is totally stalled too.
+      // Fire "track_ended" to prompt it to advance and send a fresh track_ready.
+      if (!nextTrackRef.current) {
+        console.log('[RNTP] Queue ended with no next track — requesting advance');
+        sendWS({ event: 'track_ended' });
+      }
     }
   });
 
@@ -303,12 +309,20 @@ export function useRadio(): UseRadioReturn {
     if (!trackToPlay || !playerReadyRef.current) return;
 
     console.log('[RNTP] Error not self-recovered (state:', stateAfterWait, ') — recovering with:', trackToPlay.songTitle);
+    // Capture before clearing: if the queue had ended via PlaybackQueueEnded
+    // (not PlaybackActiveTrackChanged), track_ended was never sent to the backend.
+    // Send it after recovery so the backend advances and generates the next track.
+    const needsTrackEnded = queueEndedRef.current;
     nextTrackRef.current = null;
     nextQueuedRef.current = false;
     queueEndedRef.current = false;
     setNextReady(false);
     setStatus('playing');
     await playTrack(trackToPlay);
+    if (needsTrackEnded) {
+      console.log('[RNTP] Error recovery: queue had ended — sending track_ended to advance backend');
+      sendWS({ event: 'track_ended' });
+    }
   });
 
   // ------------------------------------------------------------------ //
