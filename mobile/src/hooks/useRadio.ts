@@ -281,8 +281,34 @@ export function useRadio(): UseRadioReturn {
     console.log('[RNTP] State →', event.state);
   });
 
-  useTrackPlayerEvents([Event.PlaybackError], (event) => {
+  useTrackPlayerEvents([Event.PlaybackError], async (event) => {
     console.error('[RNTP] Playback error — code:', event.code, 'message:', event.message);
+    if (localPausedRef.current) return;
+
+    // Some errors (e.g. PlayerRemoteXPC -12860) self-recover within a second.
+    // Wait before intervening so we don't fight RNTP's own recovery.
+    await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+
+    const { state: stateAfterWait } = await TrackPlayer.getPlaybackState();
+    const recovered = stateAfterWait === State.Playing
+      || stateAfterWait === State.Buffering
+      || stateAfterWait === State.Loading;
+    if (recovered) {
+      console.log('[RNTP] Error self-recovered — state:', stateAfterWait);
+      return;
+    }
+
+    // RNTP did not recover — do a full reset with the best available track.
+    const trackToPlay = nextTrackRef.current ?? currentTrackRef.current;
+    if (!trackToPlay || !playerReadyRef.current) return;
+
+    console.log('[RNTP] Error not self-recovered (state:', stateAfterWait, ') — recovering with:', trackToPlay.songTitle);
+    nextTrackRef.current = null;
+    nextQueuedRef.current = false;
+    queueEndedRef.current = false;
+    setNextReady(false);
+    setStatus('playing');
+    await playTrack(trackToPlay);
   });
 
   // ------------------------------------------------------------------ //
