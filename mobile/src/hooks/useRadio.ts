@@ -110,7 +110,11 @@ export function useRadio(): UseRadioReturn {
   // ------------------------------------------------------------------ //
 
   const downloadAudio = useCallback(async (track: Track): Promise<string> => {
-    const localUri = `${FileSystem.cacheDirectory}track_${track.id}.mp3`;
+    // Use documentDirectory (not cacheDirectory): iOS can delete the Caches dir
+    // for backgrounded apps under memory pressure, causing FigFilePlayer -12864
+    // when RNTP tries to open the queued next-track file. The Documents dir is
+    // persistent for the lifetime of the app install.
+    const localUri = `${FileSystem.documentDirectory}track_${track.id}.mp3`;
     const info = await FileSystem.getInfoAsync(localUri);
     if (info.exists) {
       console.log('[Audio] Cache hit for:', track.songTitle);
@@ -327,7 +331,7 @@ export function useRadio(): UseRadioReturn {
       }, 25_000);
     };
 
-    ws.onmessage = (event: MessageEvent) => {
+    ws.onmessage = async (event: MessageEvent) => {
       let msg: WSMessage;
       try {
         msg = JSON.parse(event.data as string) as WSMessage;
@@ -352,11 +356,27 @@ export function useRadio(): UseRadioReturn {
             console.log('[Radio] track_ready (current) — already playing, skip reset:', track.songTitle);
             setStatus('playing');
           } else if (alreadyPlayingId && alreadyPlayingId !== track.id) {
-            // RNTP auto-advanced while WS was dead; backend hasn't caught up yet.
-            // Re-sync by sending track_ended so the backend loop advances to match us.
-            console.log('[Radio] WS reconnect: RNTP ahead of backend, sending track_ended to sync');
-            sendWS({ event: 'track_ended' });
-            setStatus('playing');
+            // currentTrackRef has a different track than the server's current track.
+            // Only re-sync if RNTP is actively playing — meaning it auto-advanced while
+            // WS was dead and the backend hasn't caught up yet.
+            // If RNTP is stopped/idle (queue exhausted normally), fall through to playTrack()
+            // so we don't send a spurious track_ended that skips the incoming track.
+            const rtpState = await TrackPlayer.getState();
+            const isRntpPlaying = rtpState === State.Playing
+              || rtpState === State.Buffering
+              || rtpState === State.Loading;
+            if (isRntpPlaying) {
+              console.log('[Radio] WS reconnect: RNTP ahead of backend, sending track_ended to sync');
+              sendWS({ event: 'track_ended' });
+              setStatus('playing');
+            } else {
+              // RNTP has stopped — queue was exhausted, backend is now sending the next track.
+              console.log('[Radio] track_ready (current) after queue end:', track.songTitle);
+              nextTrackRef.current = null;
+              setNextReady(false);
+              setStatus('playing');
+              playTrack(track);
+            }
           } else {
             // No current track — normal first-play flow.
             console.log('[Radio] track_ready (current):', track.songTitle);
