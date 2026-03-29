@@ -550,6 +550,15 @@ class RadioOrchestrator:
                 ),
             )
 
+        if self.next_track:
+            await self._send_to(
+                ws,
+                WSMessage(
+                    event="track_ready",
+                    data={"track": self._make_track_dict(self.next_track), "isNext": True},
+                ),
+            )
+
         if self.state == RadioState.PLAYING:
             msg = "Playing — next track ready" if self.next_track else "Playing — generating next track..."
         elif self.state == RadioState.GENERATING:
