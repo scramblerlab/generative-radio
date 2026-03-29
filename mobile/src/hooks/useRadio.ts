@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
+import RNBlobUtil from 'react-native-blob-util';
 import TrackPlayer, {
   Event,
   State,
@@ -127,9 +128,15 @@ export function useRadio(): UseRadioReturn {
     }
     const url = `${BACKEND_URL}${track.audioUrl}`;
     console.log('[Audio] Downloading to cache:', track.songTitle, '—', url);
-    const result = await FileSystem.downloadAsync(url, localUri);
+    // Use react-native-blob-util with IOSBackgroundTask: true so iOS schedules
+    // this as a proper background URLSession transfer — not throttled like
+    // FileSystem.downloadAsync which uses a random-UUID background session.
+    await RNBlobUtil.config({
+      path: localUri.replace('file://', ''),
+      IOSBackgroundTask: true,
+    }).fetch('GET', url);
     console.log('[Audio] Download complete:', track.songTitle);
-    return result.uri;
+    return localUri;
   }, []);
 
   // ------------------------------------------------------------------ //
