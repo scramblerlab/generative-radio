@@ -1,0 +1,14 @@
+{
+  "name": "radio-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "frontend",
+    "mobile",
+    "packages/*"
+  ],
+  "scripts": {
+    "web": "npm run dev --workspace=frontend",
+    "mobile": "npm run start --workspace=mobile"
+  }
+}

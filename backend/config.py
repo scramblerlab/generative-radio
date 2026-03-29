@@ -6,8 +6,10 @@ import psutil
 
 logger = logging.getLogger(__name__)
 
-# LLM model — qwen3.5:4b used for all song prompt generation.
+# LLM models — 4b is default; 0.8b is used on memory-constrained machines.
 OLLAMA_MODEL_NAME = "qwen3.5:4b"
+OLLAMA_MODEL_NAME_SMALL = "qwen3.5:0.8b"
+LLM_SMALL_MODEL_THRESHOLD_GB = 32  # Use 0.8b when unified memory < 32 GB
 
 # Audio duration tiers (unified memory in GB → max song duration in seconds).
 # See docs/acestep-memory-vs-duration.md for the research behind these numbers.
@@ -40,12 +42,20 @@ def select_ollama_model() -> str:
 
     Priority:
       1. OLLAMA_MODEL environment variable (manual override)
-      2. qwen3.5:4b on all machines — sufficient for prompt generation
+      2. qwen3.5:0.8b on machines with < 32 GB unified memory
+      3. qwen3.5:4b otherwise
     """
     env_override = os.environ.get("OLLAMA_MODEL")
     if env_override:
         logger.info(f"[config] OLLAMA_MODEL env override active: {env_override}")
         return env_override
+
+    if _MEMORY_GB < LLM_SMALL_MODEL_THRESHOLD_GB:
+        logger.info(
+            f"[config] Detected {_MEMORY_GB}GB unified memory (< {LLM_SMALL_MODEL_THRESHOLD_GB}GB) "
+            f"→ using {OLLAMA_MODEL_NAME_SMALL}"
+        )
+        return OLLAMA_MODEL_NAME_SMALL
 
     logger.info(f"[config] Detected {_MEMORY_GB}GB unified memory → using {OLLAMA_MODEL_NAME}")
     return OLLAMA_MODEL_NAME
