@@ -102,6 +102,10 @@ export function useRadio(): UseRadioReturn {
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isActiveRef = useRef(false);
   const playerReadyRef = useRef(false);
+  // True only after TrackPlayer.add() succeeds for the next track.
+  // nextTrackRef being set just means we received track_ready — the download
+  // may still be in-flight. nextQueuedRef confirms it's in RNTP's queue.
+  const nextQueuedRef = useRef(false);
 
   // ------------------------------------------------------------------ //
   // Audio download helper — mirrors web app's Blob URL pre-fetch.
@@ -202,6 +206,7 @@ export function useRadio(): UseRadioReturn {
       console.log('[RNTP] Track changed — advancing to next');
       const next = nextTrackRef.current;
       nextTrackRef.current = null;
+      nextQueuedRef.current = false;
       setNextReady(false);
       setStatus('playing');
       setCurrentTrack(next);
@@ -234,13 +239,30 @@ export function useRadio(): UseRadioReturn {
   });
 
   useTrackPlayerEvents([Event.PlaybackQueueEnded], () => {
-    // Queue fully exhausted (no pre-buffered next track)
-    if (!nextTrackRef.current) {
-      console.log('[RNTP] Queue ended — buffering');
+    // Queue fully exhausted. Two cases require recovery:
+    // 1. No next track at all — normal gap between tracks.
+    // 2. nextTrackRef is set but nextQueuedRef is false — download was suspended
+    //    by iOS in background and never completed, so TrackPlayer.add() was never
+    //    called. The ref is set but the queue is empty.
+    if (!nextTrackRef.current || !nextQueuedRef.current) {
+      console.log('[RNTP] Queue ended — nextTrack:', nextTrackRef.current?.songTitle ?? 'none', '/ queued:', nextQueuedRef.current);
+//      nextTrackRef.current = null;
+      nextQueuedRef.current = false;
+      setNextReady(false);
       setStatus('buffering');
       setStatusMessage('Buffering next track...');
-      sendWS({ event: 'track_ended' });
+//      sendWS({ event: 'track_ended' });
     }
+  });
+
+  // Log every RNTP state transition and playback error.
+  // Visible in Xcode Console (Window → Devices → Open Console) for Release builds.
+  useTrackPlayerEvents([Event.PlaybackState], (event) => {
+    console.log('[RNTP] State →', event.state);
+  });
+
+  useTrackPlayerEvents([Event.PlaybackError], (event) => {
+    console.error('[RNTP] Playback error — code:', event.code, 'message:', event.message);
   });
 
   // ------------------------------------------------------------------ //
@@ -299,6 +321,12 @@ export function useRadio(): UseRadioReturn {
       // Download to local cache in the background while the current track plays.
       // Once done, add to RNTP queue so it's ready for instant playback.
       const localUri = await downloadAudio(track);
+      // Guard: if iOS suspended the download and it completed late, the next
+      // track slot may have been reassigned. Discard rather than queue stale audio.
+      if (nextTrackRef.current?.id !== track.id) {
+        console.log('[Audio] Prefetch completed but track superseded — discarding:', track.songTitle);
+        return;
+      }
       await TrackPlayer.add({
         id: track.id,
         url: localUri,
@@ -307,7 +335,29 @@ export function useRadio(): UseRadioReturn {
         album: 'Generative Radio',
         duration: track.duration,
       });
+      nextQueuedRef.current = true;
       console.log('[Audio] Next track cached and queued:', track.songTitle);
+
+      // If RNTP stopped while the download was in-flight (the current track ended
+      // before prefetch completed), kick-start the newly queued track immediately
+      // rather than waiting for play_now watchdog (which fires after 150-300 s).
+      const rntpState = await TrackPlayer.getState();
+      const rntpActive = rntpState === State.Playing
+        || rntpState === State.Buffering
+        || rntpState === State.Loading;
+      if (!rntpActive && !localPausedRef.current) {
+        console.log('[Audio] Player stopped after late prefetch — kick-starting');
+        try {
+          const queue = await TrackPlayer.getQueue();
+          if (queue.length > 1) {
+            // Ended track still occupies index 0 — skip to the newly added track
+            await TrackPlayer.skip(queue.length - 1);
+          }
+          await TrackPlayer.play();
+        } catch (e) {
+          console.error('[Audio] Kick-start after late prefetch failed:', e);
+        }
+      }
     } catch (err) {
       console.error('[Audio] prefetchNextTrack failed:', err);
     }
@@ -334,9 +384,12 @@ export function useRadio(): UseRadioReturn {
       if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
       pingIntervalRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
+          console.log('[WS] Ping');
           ws.send(JSON.stringify({ event: 'ping' }));
+        } else {
+          console.warn('[WS] Ping skipped — socket state:', ws.readyState);
         }
-      }, 25_000);
+      }, 20_000);
     };
 
     ws.onmessage = async (event: MessageEvent) => {
@@ -356,6 +409,7 @@ export function useRadio(): UseRadioReturn {
       } else if (msg.event === 'track_ready') {
         const { track, isNext } = msg.data as unknown as TrackReadyData;
         if (!isNext) {
+          console.log('[Radio] track_ready (current) received:', track.songTitle, '/ currentId:', currentTrackRef.current?.id ?? 'none');
           const alreadyPlayingId = currentTrackRef.current?.id;
 
           if (alreadyPlayingId === track.id) {
@@ -416,6 +470,31 @@ export function useRadio(): UseRadioReturn {
           nextTrackRef.current = track;
           setNextReady(true);
           prefetchNextTrack(track);
+        }
+      } else if (msg.event === 'play_now') {
+        // Backend watchdog: fires when the backend thinks the client should be
+        // playing but hasn't started. Happens when track_ready(isNext=false) was
+        // lost due to a network hiccup right after we sent track_ended.
+        // Directly start the track from the payload rather than sending another
+        // track_ended (which would just loop).
+        const d = msg.data as unknown as { track: Track };
+        if (!localPausedRef.current) {
+          const rtpState = await TrackPlayer.getState();
+          const isPlaying = rtpState === State.Playing
+            || rtpState === State.Buffering
+            || rtpState === State.Loading;
+          if (isPlaying && currentTrackRef.current?.id === d.track.id) {
+            console.log('[Radio] play_now — already playing correct track, ignoring');
+          } else if (!isPlaying) {
+            console.log('[Radio] play_now — RNTP stopped, recovering with:', d.track.songTitle);
+            nextTrackRef.current = null;
+            nextQueuedRef.current = false;
+            setNextReady(false);
+            setStatus('playing');
+            playTrack(d.track);
+          } else {
+            console.log('[Radio] play_now — RNTP playing different track, ignoring');
+          }
         }
       } else if (msg.event === 'status') {
         const { state, message, nextReady: nr } = msg.data as unknown as StatusData;
@@ -488,12 +567,14 @@ export function useRadio(): UseRadioReturn {
   // AppState: retry play when app comes to foreground (equivalent of visibilitychange)
   useEffect(() => {
     const handleAppState = async (nextState: AppStateStatus) => {
+      console.log('[AppState]', nextState);
       if (nextState !== 'active') return;
       if (localPausedRef.current) return;
       try {
         const state = await TrackPlayer.getState();
+        console.log('[Audio] App foregrounded — RNTP state:', state);
         if (state !== State.Playing && playerReadyRef.current) {
-          console.log('[Audio] App foregrounded — resuming playback');
+          console.log('[Audio] Resuming playback after foreground');
           await TrackPlayer.play();
         }
       } catch {
