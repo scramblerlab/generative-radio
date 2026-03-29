@@ -46,8 +46,9 @@ fi
 # ollama pull requires the server to be running.
 # Start it temporarily if it isn't already, and clean up afterwards.
 echo ""
-echo "  Pulling LLM model (this may take several minutes):"
-echo "    qwen3.5:4b  — used for all song prompt generation"
+echo "  Pulling LLM models (this may take several minutes):"
+echo "    qwen3.5:4b   — used on machines with ≥ 32 GB unified memory"
+echo "    qwen3.5:0.8b — used on machines with < 32 GB unified memory (faster)"
 echo ""
 echo "  Note: 'MLX dynamic library not available' warnings from Ollama are"
 echo "  harmless — it falls back to Metal automatically."
@@ -76,27 +77,35 @@ else
   echo "  Ollama server already running — pulling directly."
 fi
 
-PULL_TMPFILE=$(mktemp)
-ollama pull qwen3.5:4b 2>&1 | tee "$PULL_TMPFILE"
-PULL_EXIT=${PIPESTATUS[0]}
-PULL_OUTPUT=$(cat "$PULL_TMPFILE")
-rm -f "$PULL_TMPFILE"
-if echo "$PULL_OUTPUT" | grep -qi "requires a newer version of ollama"; then
-  echo ""
-  echo "  ERROR: Your Ollama version is too old to run qwen3.5:4b."
-  echo "  Please update Ollama and re-run this script:"
-  echo ""
-  echo "    brew upgrade ollama"
-  echo ""
-  echo "  Or download the latest version from https://ollama.com/download"
-  exit 1
-fi
-if [ $PULL_EXIT -ne 0 ]; then
-  echo ""
-  echo "  ERROR: ollama pull failed (exit code $PULL_EXIT)."
-  echo "  Check the output above for details."
-  exit 1
-fi
+_ollama_pull() {
+  local MODEL="$1"
+  local PULL_TMPFILE
+  PULL_TMPFILE=$(mktemp)
+  ollama pull "$MODEL" 2>&1 | tee "$PULL_TMPFILE"
+  local PULL_EXIT=${PIPESTATUS[0]}
+  local PULL_OUTPUT
+  PULL_OUTPUT=$(cat "$PULL_TMPFILE")
+  rm -f "$PULL_TMPFILE"
+  if echo "$PULL_OUTPUT" | grep -qi "requires a newer version of ollama"; then
+    echo ""
+    echo "  ERROR: Your Ollama version is too old to run $MODEL."
+    echo "  Please update Ollama and re-run this script:"
+    echo ""
+    echo "    brew upgrade ollama"
+    echo ""
+    echo "  Or download the latest version from https://ollama.com/download"
+    exit 1
+  fi
+  if [ $PULL_EXIT -ne 0 ]; then
+    echo ""
+    echo "  ERROR: ollama pull $MODEL failed (exit code $PULL_EXIT)."
+    echo "  Check the output above for details."
+    exit 1
+  fi
+}
+
+_ollama_pull qwen3.5:4b
+_ollama_pull qwen3.5:0.8b
 
 # Stop the temporary Ollama instance if we started it
 if [[ -n "$SETUP_OLLAMA_PID" ]]; then

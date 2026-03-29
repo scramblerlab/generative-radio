@@ -23,3 +23,4 @@ saved_tracks/
 
 # User reaction records (generated at runtime)
 tracks_with_user_action/
+node_modules

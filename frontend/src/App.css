@@ -684,7 +684,7 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  text-align: center;
+  text-align: left;
   margin: 0;
 }
 

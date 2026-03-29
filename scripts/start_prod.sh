@@ -61,8 +61,21 @@ else
   OLLAMA_FLASH_ATTENTION=1 ollama serve > /tmp/generative-radio-ollama.log 2>&1 &
   OLLAMA_PID=$!
   echo "  Ollama PID: $OLLAMA_PID  (log: /tmp/generative-radio-ollama.log)"
-  sleep 2
 fi
+
+echo "  Waiting for Ollama to become ready..."
+WAIT=0
+until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
+  sleep 1
+  WAIT=$((WAIT + 1))
+  if [ $WAIT -ge 30 ]; then
+    echo "  ERROR: Ollama did not start within 30s. Check /tmp/generative-radio-ollama.log"
+    exit 1
+  fi
+done
+echo "  Ollama ready. Ensuring LLM models are present..."
+ollama pull qwen3.5:4b   2>&1 | tail -1
+ollama pull qwen3.5:0.8b 2>&1 | tail -1
 
 # ── 2. ACE-Step API ────────────────────────────────────────────────────────
 if [ ! -d "$ACESTEP_DIR" ]; then
