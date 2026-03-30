@@ -54,5 +54,6 @@ export async function downloadAudio(track: Track): Promise<string> {
         console.error('[Download] Error:', params.error);
         reject(new Error(params.error));
       });
+    task.start();
   });
 }
