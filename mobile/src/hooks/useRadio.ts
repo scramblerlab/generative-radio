@@ -374,8 +374,12 @@ export function useRadio(): UseRadioReturn {
     console.log('[Radio] handleTrackEnded — current:', currentTrackIdRef.current);
     if (localPausedRef.current) return;
     if (isFetchingRef.current) return;
+    // Signal the server immediately so it starts generating the next track.
+    // fetchAndPlay may also send it when it sees a new track, but the server
+    // debounces duplicates — sending here is what unblocks single-client flows.
+    await sendTrackEnded();
     await fetchAndPlay();
-  }, [fetchAndPlay]);
+  }, [fetchAndPlay, sendTrackEnded]);
 
   // ------------------------------------------------------------------ //
   // Wake from background
