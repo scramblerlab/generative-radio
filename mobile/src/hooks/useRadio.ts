@@ -131,7 +131,11 @@ export function useRadio(): UseRadioReturn {
     TrackPlayer.setupPlayer({
       maxCacheSize: 1024 * 5,
       iosCategory: IOSCategory.Playback,
-      iosCategoryOptions: [IOSCategoryOptions.DuckOthers],
+      iosCategoryOptions: [
+        IOSCategoryOptions.AllowAirPlay,
+        IOSCategoryOptions.AllowBluetooth,
+        IOSCategoryOptions.DuckOthers,
+      ],
       autoHandleInterruptions: true,
     }).then(() => {
       if (!mounted) return;
