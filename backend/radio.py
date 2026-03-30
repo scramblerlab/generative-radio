@@ -285,6 +285,25 @@ class RadioOrchestrator:
             self._play_now_task.cancel()
         self._play_now_task = None
 
+    async def _evict_after_delay(self, track_id: str, delay: float = 60.0) -> None:
+        """Evict a track from all caches after a grace period.
+
+        60 seconds gives mobile clients time to complete a download even when
+        the server has already advanced to the next track. The web frontend
+        creates a blob URL immediately on download so it is unaffected.
+        Note: reaction_metadata_cache is intentionally excluded — it persists
+        for the full session so users can react after a track ends.
+        """
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        self.audio_cache.pop(track_id, None)
+        self.prompt_cache.pop(track_id, None)
+        self.seed_cache.pop(track_id, None)
+        self.track_info_cache.pop(track_id, None)
+        logger.debug(f"[radio] Deferred eviction complete for track: {track_id}")
+
     async def stop(self) -> None:
         """Stop the radio session and clean up resources."""
         logger.info("[radio] Stop requested")
@@ -696,11 +715,8 @@ class RadioOrchestrator:
                     self.next_track = None
                     self._next_track_ready_event.clear()
                     if old_id:
-                        self.audio_cache.pop(old_id, None)
-                        self.prompt_cache.pop(old_id, None)
-                        self.seed_cache.pop(old_id, None)
-                        self.track_info_cache.pop(old_id, None)
-                        logger.debug(f"[radio] Evicted caches for finished track: {old_id}")
+                        asyncio.create_task(self._evict_after_delay(old_id))
+                        logger.debug(f"[radio] Scheduled deferred eviction for: {old_id}")
                     self.state = RadioState.PLAYING
                     await self._broadcast_status("playing", "Playing — generating next track...")
                     if self.current_track:
@@ -722,11 +738,8 @@ class RadioOrchestrator:
                     old_id = self.current_track.id if self.current_track else None
                     self.current_track = track
                     if old_id:
-                        self.audio_cache.pop(old_id, None)
-                        self.prompt_cache.pop(old_id, None)
-                        self.seed_cache.pop(old_id, None)
-                        self.track_info_cache.pop(old_id, None)
-                        logger.debug(f"[radio] Evicted caches for finished track: {old_id}")
+                        asyncio.create_task(self._evict_after_delay(old_id))
+                        logger.debug(f"[radio] Scheduled deferred eviction for: {old_id}")
                     self.state = RadioState.PLAYING
 
                     logger.info(f"[radio] Buffering done — now playing: '{track.song_title}'")

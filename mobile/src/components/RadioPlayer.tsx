@@ -98,22 +98,18 @@ const logStyles = StyleSheet.create({
 });
 
 function BottomStatusBar({
-  status, message, nextReady, listenerCount,
+  status, message, listenerCount,
 }: {
-  status: RadioStatus; message: string; nextReady: boolean; listenerCount: number;
+  status: RadioStatus; message: string; listenerCount: number;
 }) {
-  // Match web StatusBar logic exactly:
-  // green when playing + next track already buffered; amber (pulsing) otherwise active
-  const dotColor =
-    status === 'playing' && nextReady ? colors.green : colors.accent;
+  const dotColor = colors.accent;
   const dimmed = status === 'idle' || status === 'stopped' || status === 'connecting';
 
   const label =
     message ||
-    (status === 'generating' ? 'Generating your first track...' :
-     status === 'buffering'  ? 'Buffering next track...' :
-     status === 'playing' && nextReady ? 'Playing — next track ready' :
-     status === 'playing'    ? 'Playing — generating next track...' :
+    (status === 'generating' ? 'Waiting for radio...' :
+     status === 'buffering'  ? 'Downloading track...' :
+     status === 'playing'    ? 'Playing' :
      status === 'connecting' ? 'Connecting...' : '');
 
   return (
@@ -154,7 +150,6 @@ interface Props {
   readonly: boolean;
   track: Track | null;
   status: RadioStatus;
-  nextReady: boolean;
   statusMessage: string;
   errorMessage: string | null;
   activityLog: ActivityEntry[];
@@ -175,7 +170,7 @@ interface Props {
 }
 
 export function RadioPlayer({
-  readonly, track, status, nextReady, statusMessage, errorMessage,
+  readonly, track, status, statusMessage, errorMessage,
   activityLog, progress, audioDuration, listenerCount, localPaused,
   djLocked, djUnlockAt, activeDjName, reactionState,
   onTogglePlayPause, onSeekBackward, onSeekForward,
@@ -256,15 +251,14 @@ export function RadioPlayer({
           ) : (
             <>
               <Text style={styles.songTitle}>
-                {status === 'generating' ? 'Generating...' :
-                 status === 'buffering' ? 'Loading next track...' :
-                 status === 'connecting' ? 'Connecting...' :
-                 readonly ? 'Waiting for host...' : 'Ready'}
+                {status === 'generating' ? 'Waiting for radio...' :
+                 status === 'buffering' ? 'Loading track...' :
+                 'Tuning in...'}
               </Text>
               <Text style={styles.tags}>
-                {status === 'generating' ? 'Your first track is on its way' :
+                {status === 'generating' ? 'The next track is being generated' :
                  status === 'buffering' ? 'Almost there...' :
-                 readonly ? 'The host will start the radio soon' : 'Select genres to begin'}
+                 'Connecting to Generative Radio'}
               </Text>
             </>
           )}
@@ -379,7 +373,6 @@ export function RadioPlayer({
       <BottomStatusBar
         status={status}
         message={statusMessage}
-        nextReady={nextReady}
         listenerCount={listenerCount}
       />
     </View>
