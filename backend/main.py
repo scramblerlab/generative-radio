@@ -137,17 +137,7 @@ async def get_status():
     logger.debug("[main] GET /api/radio/status")
     track = None
     if radio.current_track:
-        ct = radio.current_track
-        track = {
-            "id": ct.id,
-            "songTitle": ct.song_title,
-            "tags": ct.tags,
-            "lyrics": ct.lyrics,
-            "bpm": ct.bpm,
-            "keyScale": ct.key_scale,
-            "duration": ct.duration,
-            "audioUrl": ct.audio_url,
-        }
+        track = radio._make_track_dict(radio.current_track)
     return {
         "state": radio.state.value,
         "currentTrack": track,
@@ -287,6 +277,18 @@ async def react_to_track(track_id: str, body: ReactRequest, request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return result
+
+
+@app.post("/api/radio/track-ended")
+async def http_track_ended():
+    """HTTP fallback for mobile clients that cannot send WS track_ended after sleep.
+
+    Delegates to the same on_track_ended() as the WS path, which has a 5-second
+    debounce — duplicate signals within 5s are silently ignored.
+    """
+    logger.info("[main] POST /api/radio/track-ended (mobile HTTP fallback)")
+    await radio.on_track_ended()
+    return {"ok": True}
 
 
 @app.get("/api/tracks/{track_id}/reactions")

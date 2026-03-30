@@ -1,53 +1,57 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
-import * as FileSystem from 'expo-file-system/legacy';
-import RNBlobUtil from 'react-native-blob-util';
 import TrackPlayer, {
   Event,
   State,
   useTrackPlayerEvents,
   Capability,
   IOSCategory,
+  IOSCategoryOptions,
+  AppKilledPlaybackBehavior,
 } from 'react-native-track-player';
 import {
   Track,
   RadioStatus,
-  ClientRole,
   WSMessage,
-  TrackReadyData,
   StatusData,
   ErrorData,
   ActivityEntry,
   ProgressData,
   ListenerCountData,
-  RoleAssignedData,
   ViewerInfo,
   ViewerListData,
-  AdvancedOptions,
   DjStateData,
   DjClaimAckData,
   ReactionState,
   ReactionUpdateData,
 } from '@radio/shared';
 import { BACKEND_URL, WS_URL } from '../config';
+import { downloadAudio } from '../utils/downloadAudio';
+
+// ------------------------------------------------------------------ //
+// Types
+// ------------------------------------------------------------------ //
+
+export type MobileRadioState = 'idle' | 'fetching' | 'polling' | 'playing' | 'paused' | 'error';
 
 export interface UseRadioReturn {
-  role: ClientRole | null;
+  // State
+  radioState: MobileRadioState;
+  // Mapped to RadioStatus for backward compat with RadioPlayer
   status: RadioStatus;
   currentTrack: Track | null;
-  nextReady: boolean;
   statusMessage: string;
   errorMessage: string | null;
   activityLog: ActivityEntry[];
   listenerCount: number;
   viewers: ViewerInfo[];
   audioDuration: number | null;
-  saveTrack: (trackId: string) => Promise<void>;
-  start: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions, djName?: string) => Promise<void>;
-  stop: () => Promise<void>;
-  updateSettings: (genres: string[], keywords: string[], language: string, feeling?: string, advancedOptions?: AdvancedOptions) => void;
   progress: number;
   localPaused: boolean;
+  // Actions
+  tuneIn: () => void;
+  tuneOut: () => Promise<void>;
+  saveTrack: (trackId: string) => Promise<void>;
   togglePlayPause: () => Promise<void>;
   seekBackward: () => Promise<void>;
   seekForward: () => Promise<void>;
@@ -66,108 +70,68 @@ export interface UseRadioReturn {
 
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 16_000;
+const POLL_INTERVAL_MS = 10_000;
+// After a debounced duplicate track_ended, wait slightly longer than the 5s
+// debounce window before retrying fetchAndPlay so the server has advanced.
+const DEBOUNCE_RETRY_MS = 6_000;
 
 export function useRadio(): UseRadioReturn {
-  const [role, setRole] = useState<ClientRole | null>(null);
-  const [status, setStatus] = useState<RadioStatus>('idle');
+  // ------------------------------------------------------------------ //
+  // React state
+  // ------------------------------------------------------------------ //
+  const [radioState, setRadioStateRaw] = useState<MobileRadioState>('idle');
+  const radioStateRef = useRef<MobileRadioState>('idle');
+  const setRadioState = (s: MobileRadioState) => {
+    radioStateRef.current = s;
+    setRadioStateRaw(s);
+  };
+
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
-  const [nextReady, setNextReady] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+  const activityIdRef = useRef(0);
   const [progress, setProgress] = useState(0);
+  const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const [listenerCount, setListenerCount] = useState(0);
   const [viewers, setViewers] = useState<ViewerInfo[]>([]);
-  const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const [localPaused, setLocalPaused] = useState(true);
-  const activityIdRef = useRef(0);
+  const localPausedRef = useRef(true);
 
-  // DJ mode state
+  // DJ mode
   const [djLocked, setDjLocked] = useState(true);
   const [djUnlockAt, setDjUnlockAt] = useState(0);
   const [activeDjName, setActiveDjName] = useState('');
   const [djPanelOpen, setDjPanelOpen] = useState(false);
 
-  // Reaction state
+  // Reactions
   const emptyReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
   const [reactionState, setReactionState] = useState<ReactionState>(emptyReaction);
   const reactionStateRef = useRef<ReactionState>(emptyReaction);
 
-  const roleRef = useRef<ClientRole | null>(null);
+  // ------------------------------------------------------------------ //
+  // Refs (no re-render)
+  // ------------------------------------------------------------------ //
+  const currentTrackIdRef = useRef<string | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isFetchingRef = useRef(false);
+
   const wsRef = useRef<WebSocket | null>(null);
-  const nextTrackRef = useRef<Track | null>(null);
-  const currentTrackRef = useRef<Track | null>(null);
-  const localPausedRef = useRef<boolean>(true);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelay = useRef(RECONNECT_BASE_MS);
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isActiveRef = useRef(false);
   const playerReadyRef = useRef(false);
-  // True only after TrackPlayer.add() succeeds for the next track.
-  // nextTrackRef being set just means we received track_ready — the download
-  // may still be in-flight. nextQueuedRef confirms it's in RNTP's queue.
-  const nextQueuedRef = useRef(false);
-  // Set to true by PlaybackQueueEnded (queue exhausted), cleared by playTrack.
-  // Used in prefetchNextTrack to decide kick-start vs queue — cannot use RNTP
-  // state because autoHandleInterruptions puts RNTP into 'loading' spuriously
-  // between tracks, making rntpActive look true when the queue is actually empty.
-  const queueEndedRef = useRef(false);
-
-  // ------------------------------------------------------------------ //
-  // Audio download helper — mirrors web app's Blob URL pre-fetch.
-  // Downloads the MP3 to the app cache directory so RNTP plays a local
-  // file:// URI instead of a chunked HTTP stream (which iOS AVPlayer
-  // misidentifies as ICY/HLS and fails with err=-12640/-12860).
-  // ------------------------------------------------------------------ //
-
-  const downloadAudio = useCallback(async (track: Track): Promise<string> => {
-    // Use documentDirectory (not cacheDirectory): iOS can delete the Caches dir
-    // for backgrounded apps under memory pressure, causing FigFilePlayer -12864
-    // when RNTP tries to open the queued next-track file. The Documents dir is
-    // persistent for the lifetime of the app install.
-    const localUri = `${FileSystem.documentDirectory}track_${track.id}.mp3`;
-    const info = await FileSystem.getInfoAsync(localUri);
-    if (info.exists) {
-      console.log('[Audio] Cache hit for:', track.songTitle);
-      return localUri;
-    }
-    const url = `${BACKEND_URL}${track.audioUrl}`;
-    const localPath = localUri.replace('file://', '');
-    // Use react-native-blob-util with IOSBackgroundTask: true so iOS schedules
-    // this as a proper background URLSession transfer — not throttled like
-    // FileSystem.downloadAsync which uses a random-UUID background session.
-    // Retry once: RNBlobUtil writes directly to the destination path (no atomic
-    // temp→move), so a failed download leaves a partial file. Delete it before
-    // retrying to prevent the cache-hit check from returning a broken file.
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        console.log(`[Audio] Downloading to cache (attempt ${attempt}):`, track.songTitle, '—', url);
-        await RNBlobUtil.config({ path: localPath, IOSBackgroundTask: true }).fetch('GET', url);
-        console.log('[Audio] Download complete:', track.songTitle);
-        return localUri;
-      } catch (err) {
-        console.warn(`[Audio] Download attempt ${attempt} failed:`, err);
-        try { await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch {}
-        if (attempt === 2) throw err;
-      }
-    }
-    throw new Error('unreachable');
-  }, []);
 
   // ------------------------------------------------------------------ //
   // TrackPlayer setup
   // ------------------------------------------------------------------ //
-
   useEffect(() => {
     let mounted = true;
     TrackPlayer.setupPlayer({
-      maxCacheSize: 1024 * 5, // 5 MB cache
-      // Keep the audio session alive when the screen is locked or the app is
-      // backgrounded. IOSCategory.Playback is RNTP's default but explicit here
-      // for clarity. autoHandleInterruptions ensures RNTP automatically resumes
-      // after interruptions (phone calls, Siri, notification sounds) instead of
-      // leaving playback permanently stopped.
+      maxCacheSize: 1024 * 5,
       iosCategory: IOSCategory.Playback,
+      iosCategoryOptions: [IOSCategoryOptions.DuckOthers],
       autoHandleInterruptions: true,
     }).then(() => {
       if (!mounted) return;
@@ -180,12 +144,15 @@ export function useRadio(): UseRadioReturn {
           Capability.JumpBackward,
         ],
         compactCapabilities: [Capability.Play, Capability.Pause],
-        jumpInterval: 10,
+        forwardJumpInterval: 10,
+        backwardJumpInterval: 10,
+        android: {
+          appKilledPlaybackBehavior: AppKilledPlaybackBehavior.PausePlayback,
+        },
       });
       playerReadyRef.current = true;
       console.log('[RNTP] Player ready');
     }).catch((err: Error) => {
-      // setupPlayer throws if called a second time (e.g. Fast Refresh) — safe to ignore
       if (err.message?.includes('already')) {
         playerReadyRef.current = true;
       } else {
@@ -198,7 +165,6 @@ export function useRadio(): UseRadioReturn {
   // ------------------------------------------------------------------ //
   // RNTP progress polling
   // ------------------------------------------------------------------ //
-
   useEffect(() => {
     const interval = setInterval(async () => {
       if (!playerReadyRef.current) return;
@@ -210,120 +176,11 @@ export function useRadio(): UseRadioReturn {
           setAudioDuration(Math.round(dur));
         }
       } catch {
-        // Player not ready or no track loaded — ignore
+        // Player not ready or no track loaded
       }
     }, 500);
     return () => clearInterval(interval);
   }, []);
-
-  // ------------------------------------------------------------------ //
-  // RNTP event: track changed (current track ended → next started)
-  // ------------------------------------------------------------------ //
-
-  useTrackPlayerEvents([Event.PlaybackActiveTrackChanged], async (event) => {
-    if (event.index === undefined || event.index === null) return;
-    // A new track became active — this means the previous one ended.
-    // We only care about transitions away from index 0 (current) to index 1 (next).
-    if (event.index > 0 && nextTrackRef.current) {
-      console.log('[RNTP] Track changed — advancing to next');
-      const next = nextTrackRef.current;
-      nextTrackRef.current = null;
-      nextQueuedRef.current = false;
-      setNextReady(false);
-      setStatus('playing');
-      setCurrentTrack(next);
-      currentTrackRef.current = next;
-      setProgress(0);
-
-      // Reset reactions and fetch fresh counts
-      const resetReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
-      setReactionState(resetReaction);
-      reactionStateRef.current = resetReaction;
-      fetch(`${BACKEND_URL}/api/tracks/${next.id}/reactions`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data: { thumb_up: number; thumb_down: number; userReaction: string | null } | null) => {
-          if (data) {
-            const fetched: ReactionState = {
-              thumbUp: data.thumb_up,
-              thumbDown: data.thumb_down,
-              userReaction: data.userReaction as ReactionState['userReaction'],
-            };
-            setReactionState(fetched);
-            reactionStateRef.current = fetched;
-          }
-        })
-        .catch(() => {});
-
-      // Remove the old track from queue (shift down)
-      await TrackPlayer.remove(0);
-      sendWS({ event: 'track_ended' });
-    }
-  });
-
-  useTrackPlayerEvents([Event.PlaybackQueueEnded], () => {
-    // Queue fully exhausted. Two cases require recovery:
-    // 1. No next track at all — normal gap between tracks.
-    // 2. nextTrackRef is set but nextQueuedRef is false — download was in-flight
-    //    when the track ended, so TrackPlayer.add() was never called.
-    console.log('[RNTP] Queue ended — nextTrack:', nextTrackRef.current?.songTitle ?? 'none', '/ queued:', nextQueuedRef.current);
-    queueEndedRef.current = true;
-    if (!nextTrackRef.current || !nextQueuedRef.current) {
-      nextQueuedRef.current = false;
-      setNextReady(false);
-      setStatus('buffering');
-      setStatusMessage('Buffering next track...');
-      // Let's assume if !nextTrackRef.current, backend is totally stalled too.
-      // Fire "track_ended" to prompt it to advance and send a fresh track_ready.
-      if (!nextTrackRef.current) {
-        console.log('[RNTP] Queue ended with no next track — requesting advance');
-        sendWS({ event: 'track_ended' });
-      }
-    }
-  });
-
-  // Log every RNTP state transition and playback error.
-  // Visible in Xcode Console (Window → Devices → Open Console) for Release builds.
-  useTrackPlayerEvents([Event.PlaybackState], (event) => {
-    console.log('[RNTP] State →', event.state);
-  });
-
-  useTrackPlayerEvents([Event.PlaybackError], async (event) => {
-    console.error('[RNTP] Playback error — code:', event.code, 'message:', event.message);
-    if (localPausedRef.current) return;
-
-    // Some errors (e.g. PlayerRemoteXPC -12860) self-recover within a second.
-    // Wait before intervening so we don't fight RNTP's own recovery.
-    await new Promise<void>((resolve) => setTimeout(resolve, 1000));
-
-    const { state: stateAfterWait } = await TrackPlayer.getPlaybackState();
-    const recovered = stateAfterWait === State.Playing
-      || stateAfterWait === State.Buffering
-      || stateAfterWait === State.Loading;
-    if (recovered) {
-      console.log('[RNTP] Error self-recovered — state:', stateAfterWait);
-      return;
-    }
-
-    // RNTP did not recover — do a full reset with the best available track.
-    const trackToPlay = nextTrackRef.current ?? currentTrackRef.current;
-    if (!trackToPlay || !playerReadyRef.current) return;
-
-    console.log('[RNTP] Error not self-recovered (state:', stateAfterWait, ') — recovering with:', trackToPlay.songTitle);
-    // Capture before clearing: if the queue had ended via PlaybackQueueEnded
-    // (not PlaybackActiveTrackChanged), track_ended was never sent to the backend.
-    // Send it after recovery so the backend advances and generates the next track.
-    const needsTrackEnded = queueEndedRef.current;
-    nextTrackRef.current = null;
-    nextQueuedRef.current = false;
-    queueEndedRef.current = false;
-    setNextReady(false);
-    setStatus('playing');
-    await playTrack(trackToPlay);
-    if (needsTrackEnded) {
-      console.log('[RNTP] Error recovery: queue had ended — sending track_ended to advance backend');
-      sendWS({ event: 'track_ended' });
-    }
-  });
 
   // ------------------------------------------------------------------ //
   // Internal helpers
@@ -332,32 +189,144 @@ export function useRadio(): UseRadioReturn {
   const sendWS = useCallback((data: object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data));
-      console.log('[WS] Sending:', data);
     } else {
       console.warn('[WS] Cannot send — socket not open');
     }
   }, []);
 
-  const playTrack = useCallback(async (track: Track) => {
-    console.log('[Audio] Playing track:', track.songTitle);
-    queueEndedRef.current = false;
-    setCurrentTrack(track);
-    currentTrackRef.current = track;
-    setProgress(0);
-    setAudioDuration(null);
+  const sendTrackEnded = useCallback(async () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ event: 'track_ended' }));
+      console.log('[Radio] track_ended sent via WS');
+      return;
+    }
+    // HTTP fallback when WS is dead after sleep
+    console.log('[Radio] WS not open — track_ended via HTTP fallback');
+    try {
+      await fetch(`${BACKEND_URL}/api/radio/track-ended`, { method: 'POST' });
+    } catch (err) {
+      console.warn('[Radio] HTTP track-ended fallback failed:', err);
+      // Best-effort; server watchdog fires after duration+3s
+    }
+  }, []);
+
+  const fetchReactions = useCallback((trackId: string) => {
+    const resetReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
+    setReactionState(resetReaction);
+    reactionStateRef.current = resetReaction;
+    fetch(`${BACKEND_URL}/api/tracks/${trackId}/reactions`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { thumb_up: number; thumb_down: number; userReaction: string | null } | null) => {
+        if (data) {
+          const fetched: ReactionState = {
+            thumbUp: data.thumb_up,
+            thumbDown: data.thumb_down,
+            userReaction: data.userReaction as ReactionState['userReaction'],
+          };
+          setReactionState(fetched);
+          reactionStateRef.current = fetched;
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // ------------------------------------------------------------------ //
+  // Polling
+  // ------------------------------------------------------------------ //
+
+  // Use a ref to hold the latest fetchAndPlay to break the circular dep
+  // between startPolling and fetchAndPlay.
+  const fetchAndPlayRef = useRef<(() => Promise<void>) | undefined>(undefined);
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+      console.log('[Radio] Polling stopped');
+    }
+  }, []);
+
+  const startPolling = useCallback(() => {
+    if (pollTimerRef.current) return;
+    console.log('[Radio] Starting poll (10s interval)');
+    setRadioState('polling');
+    setStatusMessage('Waiting for radio...');
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/radio/status`);
+        if (!res.ok) return;
+        const data = await res.json() as { currentTrack: Track | null };
+        if (data.currentTrack && data.currentTrack.id !== currentTrackIdRef.current) {
+          console.log('[Radio] Poll: track available —', data.currentTrack.songTitle);
+          stopPolling();
+          fetchAndPlayRef.current?.();
+        }
+      } catch {
+        // Network error — keep polling
+      }
+    }, POLL_INTERVAL_MS);
+  }, [stopPolling]);
+
+  // ------------------------------------------------------------------ //
+  // Core: fetchAndPlay
+  // ------------------------------------------------------------------ //
+
+  const fetchAndPlay = useCallback(async () => {
+    if (isFetchingRef.current) {
+      console.log('[Radio] fetchAndPlay: mutex held, skipping');
+      return;
+    }
+    isFetchingRef.current = true;
+    setRadioState('fetching');
+    setStatusMessage('Loading track...');
     setErrorMessage(null);
 
-    const keepPaused = localPausedRef.current;
-    if (!keepPaused) {
-      setLocalPaused(false);
-      localPausedRef.current = false;
-    }
-
-    if (!playerReadyRef.current) return;
     try {
-      // Download to local cache so RNTP plays a file:// URI — iOS AVPlayer
-      // mis-handles chunked HTTP streams as ICY/HLS (err=-12640/-12860).
+      const res = await fetch(`${BACKEND_URL}/api/radio/status`);
+      if (!res.ok) throw new Error(`Status ${res.status}`);
+      const data = await res.json() as { currentTrack: Track | null };
+
+      if (!data.currentTrack) {
+        // No track yet — server still generating; poll
+        console.log('[Radio] No track on server yet — starting poll');
+        isFetchingRef.current = false;
+        startPolling();
+        return;
+      }
+
+      const track = data.currentTrack;
+
+      // Duplicate guard: already playing this track
+      if (currentTrackIdRef.current === track.id) {
+        console.log('[Radio] Already playing track', track.id, '— rechecking RNTP state');
+        const { state } = await TrackPlayer.getPlaybackState();
+        const rntpPlaying = state === State.Playing || state === State.Buffering || state === State.Loading;
+        isFetchingRef.current = false;
+        if (rntpPlaying) {
+          setRadioState('playing');
+        } else {
+          // Server is still on same track but RNTP stopped — wait for server to advance
+          // Retry after the debounce window
+          console.log('[Radio] Same track, RNTP stopped — retrying after', DEBOUNCE_RETRY_MS, 'ms');
+          setTimeout(() => fetchAndPlayRef.current?.(), DEBOUNCE_RETRY_MS);
+        }
+        return;
+      }
+
+      stopPolling();
+
+      // Signal previous track ended — do this BEFORE resetting RNTP so the
+      // server has maximum time to generate the next track while we play.
+      const hadPreviousTrack = currentTrackIdRef.current !== null;
+      if (hadPreviousTrack) {
+        await sendTrackEnded();
+      }
+
+      // Download audio to fixed local file
       const localUri = await downloadAudio(track);
+
+      // Set up RNTP
+      if (!playerReadyRef.current) throw new Error('Player not ready');
       await TrackPlayer.reset();
       await TrackPlayer.add({
         id: track.id,
@@ -367,124 +336,144 @@ export function useRadio(): UseRadioReturn {
         album: 'Generative Radio',
         duration: track.duration,
       });
-      if (!keepPaused) {
-        await TrackPlayer.play();
-      }
-    } catch (err) {
-      console.error('[Audio] playTrack failed:', err);
-    }
-  }, [downloadAudio]);
 
-  const prefetchNextTrack = useCallback(async (track: Track) => {
-    console.log('[Audio] Pre-fetching next track to cache:', track.songTitle);
-    if (!playerReadyRef.current) return;
-    try {
-      // Download to local cache in the background while the current track plays.
-      // Once done, add to RNTP queue so it's ready for instant playback.
-      const localUri = await downloadAudio(track);
-      // Guard: if iOS suspended the download and it completed late, the next
-      // track slot may have been reassigned. Discard rather than queue stale audio.
-      if (nextTrackRef.current?.id !== track.id) {
-        console.log('[Audio] Prefetch completed but track superseded — discarding:', track.songTitle);
-        return;
-      }
-      // Use queueEndedRef (set by PlaybackQueueEnded) to decide kick-start vs queue.
-      // Cannot use RNTP state: autoHandleInterruptions fires a spurious 'loading'
-      // between tracks, making the state look active when the queue is actually empty.
-      if (queueEndedRef.current && !localPausedRef.current) {
-        // Queue ended while download was in-flight — full reset so audio session
-        // is reactivated cleanly (skip+play into a broken session fails).
-        console.log('[Audio] Late prefetch — queue already ended, resetting and playing directly:', track.songTitle);
-        nextTrackRef.current = null;
-        nextQueuedRef.current = false;
-        setNextReady(false);
-        setStatus('playing');
-        await playTrack(track);
-      } else {
-        // Current track still playing — queue for auto-advance
-        await TrackPlayer.add({
-          id: track.id,
-          url: localUri,
-          title: track.songTitle,
-          artist: track.genre,
-          album: 'Generative Radio',
-          duration: track.duration,
-        });
-        nextQueuedRef.current = true;
-        console.log('[Audio] Next track cached and queued:', track.songTitle);
+      localPausedRef.current = false;
+      setLocalPaused(false);
+      await TrackPlayer.play();
 
-        // Recovery: if RNTP errored during a track transition (audio session failure)
-        // the queued track won't auto-play. Full reset re-activates the session cleanly.
-        const postAddState = (await TrackPlayer.getPlaybackState()).state;
-        const isInactive = (postAddState as string) === 'error'
-          || postAddState === State.None
-          || postAddState === State.Stopped;
-        if (isInactive && !localPausedRef.current) {
-          console.log('[Audio] RNTP inactive after queue add (state:', postAddState, ') — recovering');
-          nextTrackRef.current = null;
-          nextQueuedRef.current = false;
-          setNextReady(false);
-          setStatus('playing');
-          await playTrack(track);
-        }
-      }
+      currentTrackIdRef.current = track.id;
+      setCurrentTrack(track);
+      setRadioState('playing');
+      setStatusMessage('');
+      setProgress(0);
+      setAudioDuration(null);
+      fetchReactions(track.id);
+
     } catch (err) {
-      console.error('[Audio] prefetchNextTrack failed:', err);
-      // Clean up any partial file so cache-hit check won't return a broken URI.
-      try {
-        const localUri = `${FileSystem.documentDirectory}track_${track.id}.mp3`;
-        await FileSystem.deleteAsync(localUri, { idempotent: true });
-      } catch {}
-      // If the queue already ended while the download was failing, signal the
-      // backend to advance — play_now or track_ready will trigger fresh recovery.
-      if (queueEndedRef.current) {
-        console.log('[Audio] Download failed and queue ended — requesting next track');
-        nextTrackRef.current = null;
-        nextQueuedRef.current = false;
-        queueEndedRef.current = false;
-        setNextReady(false);
-        setStatus('buffering');
-        sendWS({ event: 'track_ended' });
-      } else {
-        // Queue still has a current track — just clear the stale next-track ref
-        // so a future track_ready(next) can start fresh.
-        nextTrackRef.current = null;
-        nextQueuedRef.current = false;
-        setNextReady(false);
-      }
+      console.error('[Radio] fetchAndPlay failed:', err);
+      setRadioState('error');
+      setErrorMessage('Failed to load track — retrying...');
+      isFetchingRef.current = false;
+      setTimeout(() => fetchAndPlayRef.current?.(), 3_000);
+      return;
     }
-  }, [downloadAudio, sendWS]);
+
+    isFetchingRef.current = false;
+  }, [sendTrackEnded, startPolling, stopPolling, fetchReactions]);
+
+  // Keep the ref in sync so polling and other callbacks can always call the latest version
+  useEffect(() => {
+    fetchAndPlayRef.current = fetchAndPlay;
+  }, [fetchAndPlay]);
 
   // ------------------------------------------------------------------ //
-  // WebSocket connection
+  // Track ended
+  // ------------------------------------------------------------------ //
+
+  const handleTrackEnded = useCallback(async () => {
+    console.log('[Radio] handleTrackEnded — current:', currentTrackIdRef.current);
+    if (localPausedRef.current) return;
+    if (isFetchingRef.current) return;
+    await fetchAndPlay();
+  }, [fetchAndPlay]);
+
+  // ------------------------------------------------------------------ //
+  // Wake from background
+  // ------------------------------------------------------------------ //
+
+  const handleWake = useCallback(async () => {
+    const state = radioStateRef.current;
+    console.log('[AppState] Wake — radioState:', state, 'localPaused:', localPausedRef.current);
+
+    if (localPausedRef.current) return;
+
+    switch (state) {
+      case 'playing': {
+        const { state: rntpState } = await TrackPlayer.getPlaybackState();
+        const active = rntpState === State.Playing || rntpState === State.Buffering;
+        if (!active && playerReadyRef.current) {
+          // Try a simple resume first (covers normal backgrounding)
+          try { await TrackPlayer.play(); } catch {}
+          await new Promise<void>((r) => setTimeout(r, 1_000));
+          const { state: after } = await TrackPlayer.getPlaybackState();
+          if (after !== State.Playing && after !== State.Buffering) {
+            console.log('[Wake] RNTP did not resume — re-fetching');
+            await fetchAndPlay();
+          }
+        }
+        break;
+      }
+      case 'fetching':
+        // isFetchingRef may be stuck true from a fetch killed by iOS sleep
+        if (isFetchingRef.current) {
+          console.log('[Wake] Fetch was in-flight during sleep — resetting mutex + retrying');
+          isFetchingRef.current = false;
+          await fetchAndPlay();
+        }
+        break;
+      case 'polling':
+        // Poll interval was suspended by iOS; restart it
+        stopPolling();
+        startPolling();
+        break;
+      case 'error':
+        await fetchAndPlay();
+        break;
+      case 'idle':
+      case 'paused':
+        break;
+    }
+  }, [fetchAndPlay, startPolling, stopPolling]);
+
+  // ------------------------------------------------------------------ //
+  // RNTP events
+  // ------------------------------------------------------------------ //
+
+  useTrackPlayerEvents([Event.PlaybackQueueEnded], () => {
+    console.log('[RNTP] Queue ended');
+    handleTrackEnded();
+  });
+
+  useTrackPlayerEvents([Event.PlaybackState], (event) => {
+    console.log('[RNTP] State →', event.state);
+  });
+
+  useTrackPlayerEvents([Event.PlaybackError], async (event) => {
+    console.error('[RNTP] Playback error — code:', event.code, 'message:', event.message);
+    if (localPausedRef.current) return;
+    await new Promise<void>((r) => setTimeout(r, 1_000));
+    const { state } = await TrackPlayer.getPlaybackState();
+    const recovered = state === State.Playing || state === State.Buffering || state === State.Loading;
+    if (!recovered) {
+      console.log('[RNTP] Error not self-recovered — calling fetchAndPlay');
+      isFetchingRef.current = false;
+      await fetchAndPlay();
+    }
+  });
+
+  // ------------------------------------------------------------------ //
+  // WebSocket
   // ------------------------------------------------------------------ //
 
   const connectWebSocket = useCallback(() => {
     if (!isActiveRef.current) return;
     console.log('[WS] Connecting to', WS_URL);
-    setStatus('connecting');
 
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('[WS] Connection established');
+      console.log('[WS] Connected');
       reconnectDelay.current = RECONNECT_BASE_MS;
-      // Keep-alive ping every 25 s — iOS kills idle TCP connections in background
-      // even with UIBackgroundModes:audio. Without this the WS silently dies and
-      // track_ended is never delivered, stalling the radio loop.
       if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
       pingIntervalRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
-          console.log('[WS] Ping');
           ws.send(JSON.stringify({ event: 'ping' }));
-        } else {
-          console.warn('[WS] Ping skipped — socket state:', ws.readyState);
         }
       }, 20_000);
     };
 
-    ws.onmessage = async (event: MessageEvent) => {
+    ws.onmessage = (event: MessageEvent) => {
       let msg: WSMessage;
       try {
         msg = JSON.parse(event.data as string) as WSMessage;
@@ -494,105 +483,16 @@ export function useRadio(): UseRadioReturn {
       }
       console.log('[WS] Received:', msg.event);
 
-      if (msg.event === 'role_assigned') {
-        const { role: assignedRole } = msg.data as unknown as RoleAssignedData;
-        roleRef.current = assignedRole;
-        setRole(assignedRole);
-      } else if (msg.event === 'track_ready') {
-        const { track, isNext } = msg.data as unknown as TrackReadyData;
-        if (!isNext) {
-          console.log('[Radio] track_ready (current) received:', track.songTitle, '/ currentId:', currentTrackRef.current?.id ?? 'none');
-          const alreadyPlayingId = currentTrackRef.current?.id;
-
-          if (alreadyPlayingId === track.id) {
-            // WS reconnected mid-track — RNTP is already playing this track; skip reset.
-            // Mirrors the duplicate-protection in the web hook.
-            console.log('[Radio] track_ready (current) — already playing, skip reset:', track.songTitle);
-            setStatus('playing');
-          } else if (alreadyPlayingId && alreadyPlayingId !== track.id) {
-            // currentTrackRef has a different track than the server's current track.
-            // Only re-sync if RNTP is actively playing — meaning it auto-advanced while
-            // WS was dead and the backend hasn't caught up yet.
-            // If RNTP is stopped/idle (queue exhausted normally), fall through to playTrack()
-            // so we don't send a spurious track_ended that skips the incoming track.
-            const rtpState = (await TrackPlayer.getPlaybackState()).state;
-            const isRntpPlaying = rtpState === State.Playing
-              || rtpState === State.Buffering
-              || rtpState === State.Loading;
-            if (isRntpPlaying) {
-              console.log('[Radio] WS reconnect: RNTP ahead of backend, sending track_ended to sync');
-              sendWS({ event: 'track_ended' });
-              setStatus('playing');
-            } else {
-              // RNTP has stopped — queue was exhausted, backend is now sending the next track.
-              console.log('[Radio] track_ready (current) after queue end:', track.songTitle);
-              nextTrackRef.current = null;
-              setNextReady(false);
-              setStatus('playing');
-              playTrack(track);
-            }
-          } else {
-            // No current track — normal first-play flow.
-            console.log('[Radio] track_ready (current):', track.songTitle);
-            nextTrackRef.current = null;
-            setNextReady(false);
-            setStatus('playing');
-            playTrack(track);
-            // Fetch reactions for this track
-            const resetReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
-            setReactionState(resetReaction);
-            reactionStateRef.current = resetReaction;
-            fetch(`${BACKEND_URL}/api/tracks/${track.id}/reactions`)
-              .then((r) => (r.ok ? r.json() : null))
-              .then((data: { thumb_up: number; thumb_down: number; userReaction: string | null } | null) => {
-                if (data) {
-                  const fetched: ReactionState = {
-                    thumbUp: data.thumb_up,
-                    thumbDown: data.thumb_down,
-                    userReaction: data.userReaction as ReactionState['userReaction'],
-                  };
-                  setReactionState(fetched);
-                  reactionStateRef.current = fetched;
-                }
-              })
-              .catch(() => {});
-          }
-        } else {
-          console.log('[Radio] track_ready (next, pre-queuing):', track.songTitle);
-          nextTrackRef.current = track;
-          setNextReady(true);
-          prefetchNextTrack(track);
-        }
-      } else if (msg.event === 'play_now') {
-        // Backend watchdog: fires when the backend thinks the client should be
-        // playing but hasn't started. Happens when track_ready(isNext=false) was
-        // lost due to a network hiccup right after we sent track_ended.
-        // Directly start the track from the payload rather than sending another
-        // track_ended (which would just loop).
-        const d = msg.data as unknown as { track: Track };
-        if (!localPausedRef.current) {
-          const rtpState = (await TrackPlayer.getPlaybackState()).state;
-          const isPlaying = rtpState === State.Playing
-            || rtpState === State.Buffering
-            || rtpState === State.Loading;
-          if (isPlaying && currentTrackRef.current?.id === d.track.id) {
-            console.log('[Radio] play_now — already playing correct track, ignoring');
-          } else if (!isPlaying) {
-            console.log('[Radio] play_now — RNTP stopped, recovering with:', d.track.songTitle);
-            nextTrackRef.current = null;
-            nextQueuedRef.current = false;
-            setNextReady(false);
-            setStatus('playing');
-            playTrack(d.track);
-          } else {
-            console.log('[Radio] play_now — RNTP playing different track, ignoring');
-          }
+      if (msg.event === 'play_now') {
+        // Backend watchdog — server thinks we should be playing.
+        // Re-fetch to recover without using the payload (payload has for_track_id, not a full Track).
+        console.log('[WS] play_now received — triggering fetchAndPlay');
+        if (!localPausedRef.current && !isFetchingRef.current) {
+          fetchAndPlayRef.current?.();
         }
       } else if (msg.event === 'status') {
-        const { state, message, nextReady: nr } = msg.data as unknown as StatusData;
-        setStatus(state);
-        setStatusMessage(message);
-        setNextReady(nr);
+        const { message } = msg.data as unknown as StatusData;
+        if (message) setStatusMessage(message);
       } else if (msg.event === 'progress') {
         const { stage, message } = msg.data as unknown as ProgressData;
         setActivityLog((prev) => [
@@ -608,7 +508,6 @@ export function useRadio(): UseRadioReturn {
       } else if (msg.event === 'error') {
         const { message } = msg.data as unknown as ErrorData;
         setErrorMessage(message);
-        setStatus('stopped');
       } else if (msg.event === 'dj_state') {
         const d = msg.data as unknown as DjStateData;
         setDjLocked(d.locked);
@@ -619,7 +518,7 @@ export function useRadio(): UseRadioReturn {
         if (granted) setDjPanelOpen(true);
       } else if (msg.event === 'reaction_update') {
         const d = msg.data as unknown as ReactionUpdateData;
-        if (currentTrackRef.current?.id === d.trackId) {
+        if (currentTrackIdRef.current === d.trackId) {
           setReactionState((prev) => ({ ...prev, thumbUp: d.thumbUp, thumbDown: d.thumbDown }));
         }
       }
@@ -643,89 +542,64 @@ export function useRadio(): UseRadioReturn {
     ws.onerror = () => {
       console.error('[WS] Socket error');
     };
-  }, [playTrack, prefetchNextTrack]);
+  }, []);
 
-  // Mount: start WS; unmount: tear down
+  // Mount: connect WS and immediately start fetching (always-viewer)
   useEffect(() => {
     isActiveRef.current = true;
     connectWebSocket();
+    // Start fetching on mount — backend auto-starts with RANDOM if idle
+    fetchAndPlayRef.current?.();
     return () => {
       isActiveRef.current = false;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
       wsRef.current?.close();
+      stopPolling();
     };
-  }, [connectWebSocket]);
+  }, [connectWebSocket, stopPolling]);
 
-  // AppState: retry play when app comes to foreground (equivalent of visibilitychange)
+  // AppState: handle foreground/background transitions
   useEffect(() => {
-    const handleAppState = async (nextState: AppStateStatus) => {
+    const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       console.log('[AppState]', nextState);
-      if (nextState !== 'active') return;
-      if (localPausedRef.current) return;
-      try {
-        const state = (await TrackPlayer.getPlaybackState()).state;
-        console.log('[Audio] App foregrounded — RNTP state:', state);
-        if (state !== State.Playing && playerReadyRef.current) {
-          console.log('[Audio] Resuming playback after foreground');
-          await TrackPlayer.play();
-        }
-      } catch {
-        // Ignore if player not ready
+      if (nextState === 'active') {
+        handleWake();
+      } else if (nextState === 'background') {
+        // Suspend poll timer — iOS may kill it anyway; handleWake restarts it
+        stopPolling();
       }
-    };
-    const sub = AppState.addEventListener('change', handleAppState);
+    });
     return () => sub.remove();
-  }, []);
+  }, [handleWake, stopPolling]);
 
   // ------------------------------------------------------------------ //
   // Public API
   // ------------------------------------------------------------------ //
 
-  const start = useCallback(async (
-    genres: string[], keywords: string[], language = 'en',
-    feeling = '', advancedOptions?: AdvancedOptions, djName = ''
-  ) => {
-    nextTrackRef.current = null;
-    setNextReady(false);
+  // tuneIn: re-trigger fetch (e.g. after error or manual stop)
+  const tuneIn = useCallback(() => {
     setErrorMessage(null);
     setActivityLog([]);
-    setStatus('generating');
-    setStatusMessage('Starting radio...');
-    setProgress(0);
-    setLocalPaused(false);
     localPausedRef.current = false;
+    setLocalPaused(false);
+    isFetchingRef.current = false;
+    fetchAndPlayRef.current?.();
+  }, []);
 
-    if (playerReadyRef.current) {
-      try { await TrackPlayer.reset(); } catch { /* ignore */ }
-    }
-
-    sendWS({ event: 'start', data: { genres, keywords, language, feeling, advancedOptions, djName } });
-  }, [sendWS]);
-
-  const updateSettings = useCallback((
-    genres: string[], keywords: string[], language = 'en',
-    feeling = '', advancedOptions?: AdvancedOptions
-  ) => {
-    setNextReady(false);
-    nextTrackRef.current = null;
-    sendWS({ event: 'reschedule', data: { genres, keywords, language, feeling, advancedOptions } });
-  }, [sendWS]);
-
-  const stop = useCallback(async () => {
-    if (playerReadyRef.current) {
-      try {
-        await TrackPlayer.pause();
-        await TrackPlayer.reset();
-      } catch { /* ignore */ }
-    }
-    nextTrackRef.current = null;
-    setNextReady(false);
-    setStatus('stopped');
+  const tuneOut = useCallback(async () => {
+    stopPolling();
+    isFetchingRef.current = false;
+    currentTrackIdRef.current = null;
+    setRadioState('idle');
+    setCurrentTrack(null);
     setProgress(0);
     setLocalPaused(true);
     localPausedRef.current = true;
-    sendWS({ event: 'stop' });
-  }, [sendWS]);
+    if (playerReadyRef.current) {
+      try { await TrackPlayer.pause(); await TrackPlayer.reset(); } catch {}
+    }
+  }, [stopPolling]);
 
   const saveTrack = useCallback(async (trackId: string): Promise<void> => {
     const res = await fetch(`${BACKEND_URL}/api/tracks/${trackId}/save`, { method: 'POST' });
@@ -765,15 +639,17 @@ export function useRadio(): UseRadioReturn {
   const togglePlayPause = useCallback(async () => {
     if (!playerReadyRef.current) return;
     try {
-      const state = (await TrackPlayer.getPlaybackState()).state;
+      const { state } = await TrackPlayer.getPlaybackState();
       if (state === State.Playing) {
         await TrackPlayer.pause();
         setLocalPaused(true);
         localPausedRef.current = true;
+        setRadioState('paused');
       } else {
         await TrackPlayer.play();
         setLocalPaused(false);
         localPausedRef.current = false;
+        setRadioState('playing');
       }
     } catch (err) {
       console.error('[Audio] togglePlayPause failed:', err);
@@ -785,7 +661,7 @@ export function useRadio(): UseRadioReturn {
     try {
       const pos = await TrackPlayer.getPosition();
       await TrackPlayer.seekTo(Math.max(0, pos - 10));
-    } catch { /* ignore */ }
+    } catch {}
   }, []);
 
   const seekForward = useCallback(async () => {
@@ -793,14 +669,30 @@ export function useRadio(): UseRadioReturn {
     try {
       const [pos, dur] = await Promise.all([TrackPlayer.getPosition(), TrackPlayer.getDuration()]);
       await TrackPlayer.seekTo(Math.min(dur, pos + 10));
-    } catch { /* ignore */ }
+    } catch {}
   }, []);
 
+  // ------------------------------------------------------------------ //
+  // Derive RadioStatus for backward compat with RadioPlayer component
+  // ------------------------------------------------------------------ //
+  const status: RadioStatus = (() => {
+    switch (radioState) {
+      case 'idle':     return 'idle';
+      case 'fetching': return 'buffering';
+      case 'polling':  return 'generating';
+      case 'playing':  return 'playing';
+      case 'paused':   return 'playing';
+      case 'error':    return 'stopped';
+    }
+  })();
+
   return {
-    role, status, currentTrack, nextReady, statusMessage, errorMessage,
-    activityLog, listenerCount, viewers, audioDuration, saveTrack,
-    start, stop, updateSettings,
-    progress, localPaused, togglePlayPause, seekBackward, seekForward,
+    radioState, status,
+    currentTrack, statusMessage, errorMessage,
+    activityLog, listenerCount, viewers,
+    audioDuration, progress, localPaused,
+    tuneIn, tuneOut, saveTrack,
+    togglePlayPause, seekBackward, seekForward,
     djLocked, djUnlockAt, activeDjName, djPanelOpen,
     claimDj, submitDj, closeDjPanel,
     reactionState, react,
