@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Track, RadioStatus, ActivityEntry, ReactionState } from '@radio/shared';
-import { colors, radius } from './theme';
+import { colors, fonts, radius } from './theme';
 
 // ------------------------------------------------------------------ //
 // Sub-components
@@ -405,12 +405,12 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     marginBottom: 16,
   },
-  badgeText: { color: colors.accent, fontSize: 11, fontWeight: '600', letterSpacing: 0.5 },
+  badgeText: { fontFamily: fonts.semiBold, color: colors.accent, fontSize: 11, letterSpacing: 0.5 },
 
   // Track info
-  songTitle: { fontSize: 24, fontWeight: '700', color: colors.text, marginBottom: 6, textAlign: 'center' },
-  tags: { fontSize: 13, color: colors.textDim, marginBottom: 6, lineHeight: 18, textAlign: 'center' },
-  meta: { fontSize: 11, color: colors.textMuted, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 10, textAlign: 'center' },
+  songTitle: { fontFamily: fonts.display, fontSize: 28, letterSpacing: 1.5, color: colors.text, marginBottom: 6, textAlign: 'center' },
+  tags: { fontFamily: fonts.regular, fontSize: 12, color: colors.textMuted, marginBottom: 6, lineHeight: 18, textAlign: 'center' },
+  meta: { fontFamily: fonts.medium, fontSize: 11, color: colors.border2, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 10, textAlign: 'center' },
 
   // Lyrics
   lyricsScroll: { maxHeight: 100, marginTop: 8, marginBottom: 4 },

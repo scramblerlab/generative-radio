@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { Genre, Keyword, Language } from '@radio/shared';
 import { BACKEND_URL } from '../config';
-import { colors, radius } from './theme';
+import { colors, fonts, radius } from './theme';
 
 const MOOD_CATEGORY_ORDER = ['emotion', 'atmosphere', 'instrument'];
 const MOOD_CATEGORY_LABELS: Record<string, string> = {
@@ -13,6 +13,8 @@ const MOOD_CATEGORY_LABELS: Record<string, string> = {
   atmosphere: 'Atmosphere',
   instrument: 'Instrument',
 };
+const FEELING_MAX_LENGTH = 200;
+const DJ_NAME_MAX_LENGTH = 50;
 
 interface Props {
   visible: boolean;
@@ -31,7 +33,7 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
   const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
   const [feeling, setFeeling] = useState('');
   const [djName, setDjName] = useState('');
-  const [djNameError, setDjNameError] = useState('');
+  const [nameError, setNameError] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -48,30 +50,35 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
   }, [visible]);
 
   const keywordsByCategory = useMemo(() => {
-    const map: Record<string, Keyword[]> = {};
+    const grouped: Record<string, Keyword[]> = {};
     for (const kw of keywords) {
-      if (!map[kw.category]) map[kw.category] = [];
-      map[kw.category].push(kw);
+      let cat = kw.category || 'other';
+      if (cat === 'energy') cat = 'emotion';
+      if (cat === 'texture') cat = 'atmosphere';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(kw);
     }
-    return map;
+    return grouped;
   }, [keywords]);
 
-  const handleSubmit = () => {
-    const name = djName.trim();
-    if (!name) { setDjNameError('DJ name is required'); return; }
-    const genreArg = isRandomGenre ? ['__random__'] : [selectedGenre];
-    const kwList = [...selectedKeywords];
-    for (const cat of randomCategories) {
-      const catKws = keywordsByCategory[cat] ?? [];
-      if (catKws.length > 0) {
-        const rand = catKws[Math.floor(Math.random() * catKws.length)];
-        kwList.push(rand.id);
-      }
-    }
-    onSubmit(genreArg, kwList, selectedLanguage, feeling, name);
+  const selectGenre = (id: string) => {
+    setIsRandomGenre(false);
+    setSelectedGenre(id);
   };
 
   const toggleKeyword = (id: string) => {
+    const kw = keywords.find((k) => k.id === id);
+    if (kw) {
+      let cat = kw.category;
+      if (cat === 'energy') cat = 'emotion';
+      if (cat === 'texture') cat = 'atmosphere';
+      setRandomCategories((prev) => {
+        if (!prev.has(cat)) return prev;
+        const next = new Set(prev);
+        next.delete(cat);
+        return next;
+      });
+    }
     setSelectedKeywords((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
@@ -79,17 +86,40 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
     });
   };
 
+  const randomizeCategory = (cat: string) => {
+    setRandomCategories((prev) => {
+      const next = new Set(prev);
+      next.has(cat) ? next.delete(cat) : next.add(cat);
+      return next;
+    });
+    const items = keywordsByCategory[cat] ?? [];
+    if (items.length > 0) {
+      setSelectedKeywords((prev) => {
+        const next = new Set(prev);
+        items.forEach((k) => next.delete(k.id));
+        return next;
+      });
+    }
+  };
+
+  const handleSubmit = () => {
+    if (!djName.trim()) {
+      setNameError(true);
+      return;
+    }
+    const keywordList = [...selectedKeywords];
+    randomCategories.forEach((cat) => keywordList.push(`__random_${cat}__`));
+    const genreArg = isRandomGenre ? ['__random__'] : [selectedGenre];
+    onSubmit(genreArg, keywordList, selectedLanguage, feeling, djName.trim());
+  };
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <View style={styles.container}>
+        {/* Header — centered, no close button (Cancel is in footer) */}
         <View style={styles.header}>
-          <View>
-            <Text style={styles.title}>You're the DJ!</Text>
-            <Text style={styles.subtitle}>Shape the next track for everyone</Text>
-          </View>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-            <Text style={styles.closeBtnText}>✕</Text>
-          </TouchableOpacity>
+          <Text style={styles.title}>You're the DJ!</Text>
+          <Text style={styles.subtitle}>Pick the vibe — your selections will drive the next tracks for everyone</Text>
         </View>
 
         {loading ? (
@@ -98,49 +128,52 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
           </View>
         ) : (
           <ScrollView contentContainerStyle={styles.content}>
+
             {/* Genre */}
-            <Text style={styles.sectionLabel}>Genre</Text>
+            <Text style={styles.sectionLabel}>Choose your genre</Text>
             <View style={styles.pillGrid}>
-              <TouchableOpacity
-                style={[styles.pill, isRandomGenre && styles.pillActive]}
-                onPress={() => setIsRandomGenre(true)}
-              >
-                <Text style={[styles.pillText, isRandomGenre && styles.pillTextActive]}>🎲 Random</Text>
-              </TouchableOpacity>
               {genres.map((g) => (
                 <TouchableOpacity
                   key={g.id}
                   style={[styles.pill, !isRandomGenre && selectedGenre === g.id && styles.pillActive]}
-                  onPress={() => { setSelectedGenre(g.id); setIsRandomGenre(false); }}
+                  onPress={() => selectGenre(g.id)}
                 >
                   <Text style={[styles.pillText, !isRandomGenre && selectedGenre === g.id && styles.pillTextActive]}>
-                    {g.icon} {g.label}
+                    {g.label}
                   </Text>
                 </TouchableOpacity>
               ))}
+              <TouchableOpacity
+                style={[styles.pill, styles.pillDashed, isRandomGenre && styles.pillActive]}
+                onPress={() => { setIsRandomGenre(true); setSelectedGenre(''); }}
+              >
+                <Text style={[styles.pillText, isRandomGenre && styles.pillTextActive]}>🎲 Random</Text>
+              </TouchableOpacity>
             </View>
 
-            {/* Keywords */}
-            <Text style={styles.sectionLabel}>Mood <Text style={styles.optional}>(optional)</Text></Text>
+            {/* Mood / Keywords */}
+            <Text style={styles.sectionLabel}>
+              Set the mood <Text style={styles.optional}>(optional)</Text>
+            </Text>
             {MOOD_CATEGORY_ORDER.filter((c) => keywordsByCategory[c]?.length).map((cat) => (
               <View key={cat} style={styles.kwCategory}>
                 <View style={styles.kwCategoryHeader}>
                   <Text style={styles.kwCategoryLabel}>{MOOD_CATEGORY_LABELS[cat]}</Text>
                   <TouchableOpacity
                     style={[styles.randBtn, randomCategories.has(cat) && styles.randBtnActive]}
-                    onPress={() => setRandomCategories((prev) => { const n = new Set(prev); n.has(cat) ? n.delete(cat) : n.add(cat); return n; })}
+                    onPress={() => randomizeCategory(cat)}
                   >
-                    <Text style={[styles.randBtnText, randomCategories.has(cat) && styles.randBtnTextActive]}>🎲 Surprise</Text>
+                    <Text style={[styles.randBtnText, randomCategories.has(cat) && styles.randBtnTextActive]}>🎲 RANDOM</Text>
                   </TouchableOpacity>
                 </View>
                 <View style={styles.pillGrid}>
                   {keywordsByCategory[cat].map((kw) => (
                     <TouchableOpacity
                       key={kw.id}
-                      style={[styles.pill, selectedKeywords.has(kw.id) && styles.pillActive]}
+                      style={[styles.pill, styles.pillKeyword, selectedKeywords.has(kw.id) && styles.pillKeywordActive]}
                       onPress={() => toggleKeyword(kw.id)}
                     >
-                      <Text style={[styles.pillText, selectedKeywords.has(kw.id) && styles.pillTextActive]}>{kw.label}</Text>
+                      <Text style={[styles.pillKeywordText, selectedKeywords.has(kw.id) && styles.pillKeywordTextActive]}>{kw.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -150,49 +183,74 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
             {/* Language */}
             <Text style={styles.sectionLabel}>Language</Text>
             <View style={styles.pillGrid}>
-              {languages.map((l) => (
-                <TouchableOpacity
-                  key={l.code}
-                  style={[styles.pill, selectedLanguage === l.code && styles.pillActive]}
-                  onPress={() => setSelectedLanguage(l.code)}
-                >
-                  <Text style={[styles.pillText, selectedLanguage === l.code && styles.pillTextActive]}>{l.label}</Text>
-                </TouchableOpacity>
-              ))}
+              {languages.map((l) => {
+                const isInstrumental = l.code === 'instrumental';
+                const isSelected = selectedLanguage === l.code;
+                return (
+                  <TouchableOpacity
+                    key={l.code}
+                    style={[
+                      styles.pill,
+                      isInstrumental && styles.pillDashed,
+                      isSelected && (isInstrumental ? styles.pillLangInstrumentalActive : styles.pillLangActive),
+                    ]}
+                    onPress={() => setSelectedLanguage(l.code)}
+                  >
+                    <Text style={[
+                      styles.pillLangText,
+                      isSelected && (isInstrumental ? styles.pillLangInstrumentalTextActive : styles.pillLangTextActive),
+                    ]}>
+                      {l.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
-            {/* Context */}
-            <Text style={styles.sectionLabel}>Context <Text style={styles.optional}>(optional)</Text></Text>
-            <TextInput
-              style={styles.textInput}
-              value={feeling}
-              onChangeText={setFeeling}
-              placeholder="Set the mood…"
-              placeholderTextColor={colors.textMuted}
-              maxLength={200}
-              multiline
-            />
+            {/* What are you doing now? */}
+            <Text style={styles.sectionLabel}>
+              What are you doing now? <Text style={styles.optional}>(optional)</Text>
+            </Text>
+            <View style={styles.feelingWrapper}>
+              <TextInput
+                style={styles.textInput}
+                value={feeling}
+                onChangeText={(t) => setFeeling(t.slice(0, FEELING_MAX_LENGTH))}
+                placeholder="e.g. Late night coding session, need focus..."
+                placeholderTextColor={colors.border2}
+                maxLength={FEELING_MAX_LENGTH}
+              />
+              <Text style={styles.charCounter}>{feeling.length}/{FEELING_MAX_LENGTH}</Text>
+            </View>
 
             {/* DJ Name */}
-            <Text style={styles.sectionLabel}>Your DJ Name</Text>
+            <Text style={styles.sectionLabel}>Your name?</Text>
             <TextInput
-              style={[styles.textInput, djNameError ? styles.inputError : null]}
+              style={[styles.textInput, nameError && !djName.trim() ? styles.inputError : null]}
               value={djName}
-              onChangeText={(t) => { setDjName(t); setDjNameError(''); }}
-              placeholder="Enter your DJ name…"
-              placeholderTextColor={colors.textMuted}
-              maxLength={50}
+              onChangeText={(t) => { setDjName(t.slice(0, DJ_NAME_MAX_LENGTH)); if (nameError) setNameError(false); }}
+              placeholder="e.g. DJ Nova"
+              placeholderTextColor={colors.border2}
+              maxLength={DJ_NAME_MAX_LENGTH}
             />
-            {djNameError ? <Text style={styles.errorText}>{djNameError}</Text> : null}
+            {nameError && !djName.trim() && (
+              <Text style={styles.errorText}>Your name is required to become the DJ</Text>
+            )}
+
           </ScrollView>
         )}
 
+        {/* Footer — vertical: submit button, then Cancel text link */}
         <View style={styles.footer}>
+          <TouchableOpacity
+            style={[styles.submitBtn, (loading || (!selectedGenre && !isRandomGenre)) && styles.submitBtnDisabled]}
+            onPress={handleSubmit}
+            disabled={loading || (!selectedGenre && !isRandomGenre)}
+          >
+            <Text style={styles.submitBtnText}>Take the Stage</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
             <Text style={styles.cancelBtnText}>Cancel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit}>
-            <Text style={styles.submitBtnText}>Take the Stage 🎤</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -201,34 +259,63 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 20, paddingTop: 60, borderBottomWidth: 1, borderBottomColor: colors.border },
-  title: { fontSize: 24, fontWeight: '700', color: colors.text },
-  subtitle: { color: colors.textDim, fontSize: 14, marginTop: 4 },
-  closeBtn: { padding: 8 },
-  closeBtnText: { color: colors.textMuted, fontSize: 18 },
+  container:    { flex: 1, backgroundColor: colors.bg },
+
+  // Header — centered
+  header:       { alignItems: 'center', padding: 20, paddingTop: 60, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: colors.border },
+  title:        { fontFamily: 'BebasNeue_400Regular', fontSize: 32, color: colors.text, letterSpacing: 1 },
+  subtitle:     { fontSize: 13, color: colors.textMuted, marginTop: 6, textAlign: 'center', letterSpacing: 0.3 },
+
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  content: { padding: 20, paddingBottom: 20 },
-  sectionLabel: { fontSize: 13, fontWeight: '600', color: colors.textDim, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10, marginTop: 20 },
-  optional: { fontWeight: '400', color: colors.textMuted },
-  pillGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
-  pill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border2, backgroundColor: colors.surface },
-  pillActive: { borderColor: colors.accent, backgroundColor: colors.accentDim },
-  pillText: { color: colors.textDim, fontSize: 13 },
-  pillTextActive: { color: colors.accent },
-  kwCategory: { marginBottom: 16 },
+  content:      { padding: 20, paddingBottom: 20 },
+
+  sectionLabel: { fontFamily: fonts.semiBold, fontSize: 13, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10, marginTop: 20 },
+  optional:     { fontFamily: fonts.regular, color: colors.border2, textTransform: 'none', letterSpacing: 0 },
+
+  // Pills — genre & base
+  pillGrid:     { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
+  pill:         { paddingHorizontal: 18, paddingVertical: 9, borderRadius: radius.pill, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface },
+  pillDashed:   { borderStyle: 'dashed' },
+  pillActive:   { borderColor: colors.accent, backgroundColor: colors.accentDim },
+  // Genre pill text: semibold + uppercase (web: font-weight:600, text-transform:uppercase)
+  pillText:     { fontFamily: fonts.semiBold, color: colors.textDim, fontSize: 13, textTransform: 'uppercase', letterSpacing: 0.5 },
+  pillTextActive: { color: colors.text },
+
+  // Keyword pills — indigo when selected (web: font-size:12, font-weight:500)
+  pillKeyword:          { paddingHorizontal: 14, paddingVertical: 7, borderRadius: radius.pill, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface },
+  pillKeywordActive:    { borderColor: colors.indigo, backgroundColor: 'rgba(99,102,241,0.12)' },
+  pillKeywordText:      { fontFamily: fonts.medium, color: colors.textMuted, fontSize: 12 },
+  pillKeywordTextActive: { color: colors.indigo },
+
+  // Language pills — green when selected (web: font-size:12, font-weight:500)
+  pillLangText:                { fontFamily: fonts.medium, color: colors.textMuted, fontSize: 12 },
+  pillLangActive:              { borderColor: colors.green, backgroundColor: 'rgba(34,197,94,0.12)' },
+  pillLangTextActive:          { color: colors.green },
+  pillLangInstrumentalActive:  { borderColor: colors.textMuted, backgroundColor: 'rgba(100,116,139,0.12)' },
+  pillLangInstrumentalTextActive: { color: colors.textMuted },
+
+  // Mood category
+  kwCategory:       { marginBottom: 16 },
   kwCategoryHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  kwCategoryLabel: { fontSize: 12, color: colors.textMuted, textTransform: 'uppercase' },
-  randBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border },
-  randBtnActive: { borderColor: colors.indigo, backgroundColor: 'rgba(99,102,241,0.12)' },
-  randBtnText: { color: colors.textMuted, fontSize: 11 },
+  // web: font-size:11, font-weight:500, color:--border-2, uppercase, letter-spacing:0.5
+  kwCategoryLabel:  { fontFamily: fonts.medium, fontSize: 11, color: colors.border2, textTransform: 'uppercase', letterSpacing: 0.5 },
+  randBtn:          { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.pill, borderWidth: 1.5, borderColor: colors.border, borderStyle: 'dashed' },
+  randBtnActive:    { borderColor: colors.indigo, backgroundColor: 'rgba(99,102,241,0.12)' },
+  randBtnText:      { fontFamily: fonts.medium, color: colors.textMuted, fontSize: 11 },
   randBtnTextActive: { color: colors.indigo },
-  textInput: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 12, color: colors.text, fontSize: 14 },
-  inputError: { borderColor: colors.red },
-  errorText: { color: colors.red, fontSize: 12, marginTop: 4 },
-  footer: { flexDirection: 'row', gap: 12, padding: 20, borderTopWidth: 1, borderTopColor: colors.border, paddingBottom: 40 },
-  cancelBtn: { flex: 1, paddingVertical: 14, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border2, alignItems: 'center' },
-  cancelBtnText: { color: colors.textDim, fontSize: 15 },
-  submitBtn: { flex: 2, paddingVertical: 14, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center' },
-  submitBtnText: { color: '#000', fontSize: 15, fontWeight: '700' },
+
+  // Text inputs
+  feelingWrapper:   { position: 'relative' },
+  textInput:        { fontFamily: fonts.regular, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 12, paddingRight: 52, color: colors.text, fontSize: 14 },
+  charCounter:      { fontFamily: fonts.regular, position: 'absolute', right: 10, top: 0, bottom: 0, textAlignVertical: 'center', color: colors.border2, fontSize: 10 },
+  inputError:       { borderColor: colors.red },
+  errorText:        { fontFamily: fonts.regular, color: colors.red, fontSize: 12, marginTop: 4 },
+
+  // Footer — vertical layout
+  footer:        { padding: 20, paddingBottom: 40, borderTopWidth: 1, borderTopColor: colors.border, gap: 12 },
+  submitBtn:     { paddingVertical: 14, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center' },
+  submitBtnDisabled: { opacity: 0.5 },
+  submitBtnText: { fontFamily: fonts.bold, color: '#000', fontSize: 15 },
+  cancelBtn:     { alignItems: 'center', paddingVertical: 4 },
+  cancelBtnText: { fontFamily: fonts.regular, fontSize: 13, color: colors.textMuted },
 });

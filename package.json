@@ -10,5 +10,10 @@
   "scripts": {
     "web": "npm run dev --workspace=frontend",
     "mobile": "npm run start --workspace=mobile"
+  },
+  "dependencies": {
+    "@expo-google-fonts/bebas-neue": "^0.4.1",
+    "@expo-google-fonts/space-grotesk": "^0.4.1",
+    "expo-font": "^55.0.4"
   }
 }
