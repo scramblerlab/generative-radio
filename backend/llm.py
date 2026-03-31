@@ -7,6 +7,13 @@ import time
 from ollama import chat
 from models import SongPrompt
 from config import OLLAMA_MODEL, MAX_DURATION_S
+from genres import GENRES
+
+_GENRE_DESCRIPTIONS: dict[str, str] = {
+    g["id"]: g["description"]
+    for g in GENRES
+    if "description" in g
+}
 
 logger = logging.getLogger(__name__)
 
@@ -226,11 +233,22 @@ class OllamaClient:
             "  Examples: female vocal, breathy, soft | male vocal, raspy, powerful belting | choir, harmonies"
         )
 
+        genre_constraints = [
+            _GENRE_DESCRIPTIONS[g] for g in genres if g in _GENRE_DESCRIPTIONS
+        ]
+        genre_constraint_block = ""
+        if genre_constraints:
+            genre_constraint_block = (
+                "\nGENRE CONSTRAINTS (strictly enforced):\n"
+                + "\n".join(f"- {c}" for c in genre_constraints)
+                + "\n"
+            )
+
         system_prompt = f"""You are a creative AI radio DJ. Your job is to generate unique, \
 original song prompts for an AI music generator (ACE-Step).
 {critical_language_block}
 SELECTED GENRES: {', '.join(genres)}
-SELECTED MOODS / KEYWORDS: {', '.join(keywords) if keywords else 'None specified'}
+{genre_constraint_block}SELECTED MOODS / KEYWORDS: {', '.join(keywords) if keywords else 'None specified'}
 {feeling_section}{history_section}
 
 CAPTION DIMENSIONS — fill each field with comma-separated descriptors:

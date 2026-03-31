@@ -41,13 +41,14 @@ if [ -d "$PROJECT_DIR/frontend/dist" ]; then
   rm -rf "$PROJECT_DIR/frontend/dist"
 fi
 
-# Install/update npm dependencies
+# Install/update npm dependencies (run from root so patch-package postinstall works)
 echo "  Installing npm dependencies..."
-cd "$PROJECT_DIR/frontend"
+cd "$PROJECT_DIR"
 npm ci --prefer-offline
 
 # Compile production bundle
 echo "  Building frontend (npm run build)..."
+cd "$PROJECT_DIR/frontend"
 npm run build
 cd "$PROJECT_DIR"
 echo "  Frontend build complete — output: frontend/dist/"
