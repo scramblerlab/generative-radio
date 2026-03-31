@@ -23,7 +23,9 @@
     "react-native-track-player": "^4.1.2"
   },
   "devDependencies": {
+    "@expo/config-plugins": "*",
     "@types/react": "~19.2.2",
+    "patch-package": "^8.0.0",
     "typescript": "~5.9.2"
   },
   "private": true
