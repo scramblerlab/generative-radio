@@ -9,6 +9,8 @@ import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -33,13 +35,20 @@ class BackgroundHttpModule(private val reactContext: ReactApplicationContext)
 
     override fun getName() = "BackgroundHttp"
 
+    // Module-scoped coroutine scope tied to the React context lifetime.
+    // Using an unmanaged CoroutineScope(Dispatchers.IO) would let coroutines outlive
+    // the JS context (e.g. after loading errors + app kill), causing stale events to
+    // fire into a freshly launched JS context and creating ghost audio players.
+    // SupervisorJob lets individual coroutines fail independently without cancelling siblings.
+    private val moduleScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
     /**
      * GET [url] and emit the result as a "BackgroundHttp.statusResult" event.
      * [requestId] is echoed back in the event so the JS listener can match it.
      */
     @ReactMethod
     fun fetchStatus(url: String, requestId: String) {
-        CoroutineScope(Dispatchers.IO).launch {
+        moduleScope.launch {
             Log.d(TAG, "fetchStatus — requestId=$requestId url=$url")
             try {
                 val client = OkHttpClient.Builder()
@@ -79,7 +88,7 @@ class BackgroundHttpModule(private val reactContext: ReactApplicationContext)
      */
     @ReactMethod
     fun sendTrackEnded(url: String) {
-        CoroutineScope(Dispatchers.IO).launch {
+        moduleScope.launch {
             Log.d(TAG, "sendTrackEnded — url=$url")
             try {
                 val client = OkHttpClient.Builder()
@@ -100,6 +109,14 @@ class BackgroundHttpModule(private val reactContext: ReactApplicationContext)
         reactContext
             .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             .emit(name, params)
+    }
+
+    /** Called when the React Native instance is torn down (app kill, reload, etc.).
+     *  Cancels all in-flight coroutines so no stale events fire into a new JS context. */
+    override fun invalidate() {
+        super.invalidate()
+        moduleScope.cancel()
+        Log.d(TAG, "invalidate — moduleScope cancelled")
     }
 
     override fun canOverrideExistingModule() = false
