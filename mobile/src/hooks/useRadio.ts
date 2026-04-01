@@ -1,14 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
-import TrackPlayer, {
-  Event,
-  State,
-  useTrackPlayerEvents,
-  Capability,
-  IOSCategory,
-  IOSCategoryOptions,
-  AppKilledPlaybackBehavior,
-} from 'react-native-track-player';
+import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import type { AudioPlayer } from 'expo-audio';
 import {
   Track,
   RadioStatus,
@@ -123,58 +116,39 @@ export function useRadio(): UseRadioReturn {
   const isActiveRef = useRef(false);
   const playerReadyRef = useRef(false);
 
+  // expo-audio player refs
+  const playerRef = useRef<AudioPlayer | null>(null);        // active music player
+  const silencePlayerRef = useRef<AudioPlayer | null>(null); // silence bridge
+  const isBridgingRef = useRef(false);                       // silence bridge active?
+
   // ------------------------------------------------------------------ //
-  // TrackPlayer setup
+  // expo-audio setup
   // ------------------------------------------------------------------ //
   useEffect(() => {
-    let mounted = true;
-    TrackPlayer.setupPlayer({
-      maxCacheSize: 1024 * 5,
-      iosCategory: IOSCategory.Playback,
-      iosCategoryOptions: [
-        IOSCategoryOptions.AllowAirPlay,
-        IOSCategoryOptions.AllowBluetooth,
-        IOSCategoryOptions.DuckOthers,
-      ],
-      autoHandleInterruptions: true,
+    setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: true,
+      interruptionMode: 'doNotMix',
+      allowsRecording: false,
     }).then(() => {
-      if (!mounted) return;
-      TrackPlayer.updateOptions({
-        capabilities: [
-          Capability.Play,
-          Capability.Pause,
-          Capability.SeekTo,
-          Capability.JumpForward,
-          Capability.JumpBackward,
-        ],
-        compactCapabilities: [Capability.Play, Capability.Pause],
-        forwardJumpInterval: 10,
-        backwardJumpInterval: 10,
-        android: {
-          appKilledPlaybackBehavior: AppKilledPlaybackBehavior.PausePlayback,
-        },
-      });
       playerReadyRef.current = true;
-      console.log('[RNTP] Player ready');
+      console.log('[Audio] AudioMode configured');
     }).catch((err: Error) => {
-      if (err.message?.includes('already')) {
-        playerReadyRef.current = true;
-      } else {
-        console.error('[RNTP] setupPlayer failed:', err);
-      }
+      console.error('[Audio] setAudioModeAsync failed:', err);
     });
-    return () => { mounted = false; };
   }, []);
 
   // ------------------------------------------------------------------ //
-  // RNTP progress polling
+  // Progress polling
   // ------------------------------------------------------------------ //
   useEffect(() => {
-    const interval = setInterval(async () => {
-      if (!playerReadyRef.current) return;
+    const interval = setInterval(() => {
+      if (!playerReadyRef.current || isBridgingRef.current) return;
+      const p = playerRef.current;
+      if (!p) return;
       try {
-        const pos = await TrackPlayer.getPosition();
-        const dur = await TrackPlayer.getDuration();
+        const dur = p.duration;
+        const pos = p.currentTime;
         if (dur > 0) {
           setProgress(pos / dur);
           setAudioDuration(Math.round(dur));
@@ -235,12 +209,46 @@ export function useRadio(): UseRadioReturn {
   }, []);
 
   // ------------------------------------------------------------------ //
+  // Silence bridge
+  // ------------------------------------------------------------------ //
+
+  const startSilenceBridge = useCallback(() => {
+    if (isBridgingRef.current) return;
+    isBridgingRef.current = true;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const s = createAudioPlayer(require('../../assets/silence.mp3'));
+      s.loop = true;
+      s.play();
+      silencePlayerRef.current = s;
+      console.log('[Radio] Silence bridge started');
+    } catch (err) {
+      console.warn('[Radio] Failed to start silence bridge:', err);
+      isBridgingRef.current = false;
+    }
+  }, []);
+
+  const stopSilenceBridge = useCallback(() => {
+    if (!isBridgingRef.current) return;
+    isBridgingRef.current = false;
+    try {
+      silencePlayerRef.current?.pause();
+      silencePlayerRef.current?.remove();
+    } catch {}
+    silencePlayerRef.current = null;
+    console.log('[Radio] Silence bridge stopped');
+  }, []);
+
+  // ------------------------------------------------------------------ //
   // Polling
   // ------------------------------------------------------------------ //
 
   // Use a ref to hold the latest fetchAndPlay to break the circular dep
   // between startPolling and fetchAndPlay.
   const fetchAndPlayRef = useRef<(() => Promise<void>) | undefined>(undefined);
+
+  // Ref for handleTrackEnded so the playbackStatusUpdate listener always calls the latest version
+  const handleTrackEndedRef = useRef<(() => void) | null>(null);
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current) {
@@ -302,16 +310,14 @@ export function useRadio(): UseRadioReturn {
 
       // Duplicate guard: already playing this track
       if (currentTrackIdRef.current === track.id) {
-        console.log('[Radio] Already playing track', track.id, '— rechecking RNTP state');
-        const { state } = await TrackPlayer.getPlaybackState();
-        const rntpPlaying = state === State.Playing || state === State.Buffering || state === State.Loading;
+        console.log('[Radio] Already playing track', track.id, '— rechecking player state');
+        const isPlaying = (playerRef.current?.playing ?? false) || isBridgingRef.current;
         isFetchingRef.current = false;
-        if (rntpPlaying) {
+        if (isPlaying) {
           setRadioState('playing');
         } else {
-          // Server is still on same track but RNTP stopped — wait for server to advance
-          // Retry after the debounce window
-          console.log('[Radio] Same track, RNTP stopped — retrying after', DEBOUNCE_RETRY_MS, 'ms');
+          // Server is still on same track but player stopped — wait for server to advance
+          console.log('[Radio] Same track, player stopped — retrying after', DEBOUNCE_RETRY_MS, 'ms');
           setTimeout(() => fetchAndPlayRef.current?.(), DEBOUNCE_RETRY_MS);
         }
         return;
@@ -319,7 +325,7 @@ export function useRadio(): UseRadioReturn {
 
       stopPolling();
 
-      // Signal previous track ended — do this BEFORE resetting RNTP so the
+      // Signal previous track ended — do this BEFORE resetting player so the
       // server has maximum time to generate the next track while we play.
       const hadPreviousTrack = currentTrackIdRef.current !== null;
       if (hadPreviousTrack) {
@@ -329,21 +335,35 @@ export function useRadio(): UseRadioReturn {
       // Download audio to fixed local file
       const localUri = await downloadAudio(track);
 
-      // Set up RNTP
+      // Stop silence bridge and set up new AudioPlayer
       if (!playerReadyRef.current) throw new Error('Player not ready');
-      await TrackPlayer.reset();
-      await TrackPlayer.add({
-        id: track.id,
-        url: localUri,
-        title: track.songTitle,
-        artist: track.genre,
-        album: 'Generative Radio',
-        duration: track.duration,
+      stopSilenceBridge();
+
+      // Tear down old player before creating new one
+      playerRef.current?.remove();
+      playerRef.current = null;
+
+      const player = createAudioPlayer({ uri: localUri });
+
+      // Detect track end via didJustFinish in status updates
+      player.addListener('playbackStatusUpdate', (status) => {
+        if (status.didJustFinish && !localPausedRef.current) {
+          handleTrackEndedRef.current?.();
+        }
       });
 
+      // Register for lock screen controls (also required on Android for
+      // sustained background playback beyond ~3 min)
+      player.setActiveForLockScreen(true, {
+        title: track.songTitle,
+        artist: track.genre,
+        albumTitle: 'Generative Radio',
+      }, { showSeekForward: true, showSeekBackward: true });
+
+      playerRef.current = player;
       localPausedRef.current = false;
       setLocalPaused(false);
-      await TrackPlayer.play();
+      player.play();
 
       currentTrackIdRef.current = track.id;
       setCurrentTrack(track);
@@ -363,9 +383,9 @@ export function useRadio(): UseRadioReturn {
     }
 
     isFetchingRef.current = false;
-  }, [sendTrackEnded, startPolling, stopPolling, fetchReactions]);
+  }, [sendTrackEnded, startPolling, stopPolling, stopSilenceBridge, fetchReactions]);
 
-  // Keep the ref in sync so polling and other callbacks can always call the latest version
+  // Keep the refs in sync so polling and other callbacks always call the latest version
   useEffect(() => {
     fetchAndPlayRef.current = fetchAndPlay;
   }, [fetchAndPlay]);
@@ -378,12 +398,17 @@ export function useRadio(): UseRadioReturn {
     console.log('[Radio] handleTrackEnded — current:', currentTrackIdRef.current);
     if (localPausedRef.current) return;
     if (isFetchingRef.current) return;
+    // Start silence bridge immediately to keep iOS audio session alive during download
+    startSilenceBridge();
     // Signal the server immediately so it starts generating the next track.
-    // fetchAndPlay may also send it when it sees a new track, but the server
-    // debounces duplicates — sending here is what unblocks single-client flows.
     await sendTrackEnded();
     await fetchAndPlay();
-  }, [fetchAndPlay, sendTrackEnded]);
+  }, [fetchAndPlay, sendTrackEnded, startSilenceBridge]);
+
+  // Keep ref in sync so the playbackStatusUpdate listener always calls latest
+  useEffect(() => {
+    handleTrackEndedRef.current = handleTrackEnded;
+  }, [handleTrackEnded]);
 
   // ------------------------------------------------------------------ //
   // Wake from background
@@ -397,15 +422,14 @@ export function useRadio(): UseRadioReturn {
 
     switch (state) {
       case 'playing': {
-        const { state: rntpState } = await TrackPlayer.getPlaybackState();
-        const active = rntpState === State.Playing || rntpState === State.Buffering;
+        const active = (playerRef.current?.playing ?? false) || isBridgingRef.current;
         if (!active && playerReadyRef.current) {
           // Try a simple resume first (covers normal backgrounding)
-          try { await TrackPlayer.play(); } catch {}
+          try { playerRef.current?.play(); } catch {}
           await new Promise<void>((r) => setTimeout(r, 1_000));
-          const { state: after } = await TrackPlayer.getPlaybackState();
-          if (after !== State.Playing && after !== State.Buffering) {
-            console.log('[Wake] RNTP did not resume — re-fetching');
+          const stillActive = (playerRef.current?.playing ?? false) || isBridgingRef.current;
+          if (!stillActive) {
+            console.log('[Wake] Player did not resume — re-fetching');
             await fetchAndPlay();
           }
         }
@@ -432,32 +456,6 @@ export function useRadio(): UseRadioReturn {
         break;
     }
   }, [fetchAndPlay, startPolling, stopPolling]);
-
-  // ------------------------------------------------------------------ //
-  // RNTP events
-  // ------------------------------------------------------------------ //
-
-  useTrackPlayerEvents([Event.PlaybackQueueEnded], () => {
-    console.log('[RNTP] Queue ended');
-    handleTrackEnded();
-  });
-
-  useTrackPlayerEvents([Event.PlaybackState], (event) => {
-    console.log('[RNTP] State →', event.state);
-  });
-
-  useTrackPlayerEvents([Event.PlaybackError], async (event) => {
-    console.error('[RNTP] Playback error — code:', event.code, 'message:', event.message);
-    if (localPausedRef.current) return;
-    await new Promise<void>((r) => setTimeout(r, 1_000));
-    const { state } = await TrackPlayer.getPlaybackState();
-    const recovered = state === State.Playing || state === State.Buffering || state === State.Loading;
-    if (!recovered) {
-      console.log('[RNTP] Error not self-recovered — calling fetchAndPlay');
-      isFetchingRef.current = false;
-      await fetchAndPlay();
-    }
-  });
 
   // ------------------------------------------------------------------ //
   // WebSocket
@@ -493,7 +491,6 @@ export function useRadio(): UseRadioReturn {
 
       if (msg.event === 'play_now') {
         // Backend watchdog — server thinks we should be playing.
-        // Re-fetch to recover without using the payload (payload has for_track_id, not a full Track).
         console.log('[WS] play_now received — triggering fetchAndPlay');
         if (!localPausedRef.current && !isFetchingRef.current) {
           fetchAndPlayRef.current?.();
@@ -585,7 +582,6 @@ export function useRadio(): UseRadioReturn {
   // Public API
   // ------------------------------------------------------------------ //
 
-  // tuneIn: re-trigger fetch (e.g. after error or manual stop)
   const tuneIn = useCallback(() => {
     setErrorMessage(null);
     setActivityLog([]);
@@ -604,10 +600,16 @@ export function useRadio(): UseRadioReturn {
     setProgress(0);
     setLocalPaused(true);
     localPausedRef.current = true;
+    stopSilenceBridge();
     if (playerReadyRef.current) {
-      try { await TrackPlayer.pause(); await TrackPlayer.reset(); } catch {}
+      try {
+        playerRef.current?.clearLockScreenControls();
+        playerRef.current?.pause();
+        playerRef.current?.remove();
+        playerRef.current = null;
+      } catch {}
     }
-  }, [stopPolling]);
+  }, [stopPolling, stopSilenceBridge]);
 
   const saveTrack = useCallback(async (trackId: string): Promise<void> => {
     const res = await fetch(`${BACKEND_URL}/api/tracks/${trackId}/save`, { method: 'POST' });
@@ -638,7 +640,12 @@ export function useRadio(): UseRadioReturn {
       });
       if (!res.ok) return;
       const data = await res.json() as { thumb_up: number; thumb_down: number; userReaction: string | null };
-      setReactionState((prev) => ({ ...prev, userReaction: data.userReaction as ReactionState['userReaction'] }));
+      setReactionState((prev) => ({
+        ...prev,
+        thumbUp: data.thumb_up,
+        thumbDown: data.thumb_down,
+        userReaction: data.userReaction as ReactionState['userReaction'],
+      }));
     } catch (err) {
       console.error('[Reactions] React failed:', err);
     }
@@ -646,15 +653,16 @@ export function useRadio(): UseRadioReturn {
 
   const togglePlayPause = useCallback(async () => {
     if (!playerReadyRef.current) return;
+    const p = playerRef.current;
+    if (!p) return;
     try {
-      const { state } = await TrackPlayer.getPlaybackState();
-      if (state === State.Playing) {
-        await TrackPlayer.pause();
+      if (p.playing) {
+        p.pause();
         setLocalPaused(true);
         localPausedRef.current = true;
         setRadioState('paused');
       } else {
-        await TrackPlayer.play();
+        p.play();
         setLocalPaused(false);
         localPausedRef.current = false;
         setRadioState('playing');
@@ -666,17 +674,19 @@ export function useRadio(): UseRadioReturn {
 
   const seekBackward = useCallback(async () => {
     if (!playerReadyRef.current) return;
+    const p = playerRef.current;
+    if (!p) return;
     try {
-      const pos = await TrackPlayer.getPosition();
-      await TrackPlayer.seekTo(Math.max(0, pos - 10));
+      await p.seekTo(Math.max(0, p.currentTime - 10));
     } catch {}
   }, []);
 
   const seekForward = useCallback(async () => {
     if (!playerReadyRef.current) return;
+    const p = playerRef.current;
+    if (!p) return;
     try {
-      const [pos, dur] = await Promise.all([TrackPlayer.getPosition(), TrackPlayer.getDuration()]);
-      await TrackPlayer.seekTo(Math.min(dur, pos + 10));
+      await p.seekTo(Math.min(p.duration ?? 0, p.currentTime + 10));
     } catch {}
   }, []);
 
