@@ -15,7 +15,9 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.generativeradio.app",
       "infoPlist": {
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
     "android": {
@@ -38,7 +40,8 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "./plugins/withBackgroundDownloader"
+      "./plugins/withBackgroundDownloader",
+      "expo-audio"
     ]
   }
 }
