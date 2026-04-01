@@ -45,7 +45,10 @@
     },
     "plugins": [
       "./plugins/withBackgroundDownloader",
-      ["expo-audio", { "enableBackgroundPlayback": true }]
+      ["expo-audio", { 
+        "enableBackgroundPlayback": true,
+        "enableRemoteControl": true  
+      }]
     ]
   }
 }
