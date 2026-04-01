@@ -1,7 +1,7 @@
-# Generative Radio — Build Specification (v3)
+# Generative Radio — Build Specification (v4)
 
-> **Snapshot date:** 2026-03-18
-> **Supersedes:** `docs/BUILD_SPEC_V1.md` (v2 spec → moved to docs/)
+> **Snapshot date:** 2026-04-01
+> **Supersedes:** `docs/BUILD_SPEC_V1.md` (v2), v3 (2026-03-18)
 >
 > This document describes the current state of the codebase — architecture, runtime behaviour, protocols, and implementation details — as a single reference for contributors and AI coding assistants.
 
@@ -17,27 +17,29 @@
 6. [Runtime Configuration](#6-runtime-configuration)
 7. [Backend Implementation](#7-backend-implementation)
 8. [Frontend Implementation](#8-frontend-implementation)
-9. [WebSocket Protocol](#9-websocket-protocol)
-10. [Multi-Listener: Controller / Viewer Model](#10-multi-listener-controller--viewer-model)
-11. [DJ Mode — "Everyone Can Be a DJ"](#11-dj-mode--everyone-can-be-a-dj)
-12. [Audio Pipeline & Pre-fetching](#12-audio-pipeline--pre-fetching)
-13. [Language & Instrumental Support](#13-language--instrumental-support)
-14. [Dimension-Based LLM Prompting](#14-dimension-based-llm-prompting)
-15. [ACE-Step 1.5 Integration](#15-ace-step-15-integration)
-16. [Advanced Options](#16-advanced-options)
-17. [Save Track Feature](#17-save-track-feature)
-18. [Launch Scripts](#18-launch-scripts)
-19. [Memory, Duration & Performance](#19-memory-duration--performance)
-20. [Remote Access (Cloudflare Tunnel)](#20-remote-access-cloudflare-tunnel)
-21. [Security Headers](#21-security-headers)
-22. [Debugging & Logging](#22-debugging--logging)
-23. [Design System](#23-design-system)
+9. [Mobile App Implementation](#9-mobile-app-implementation)
+10. [WebSocket Protocol](#10-websocket-protocol)
+11. [Multi-Listener: Controller / Viewer Model](#11-multi-listener-controller--viewer-model)
+12. [DJ Mode — "Everyone Can Be a DJ"](#12-dj-mode--everyone-can-be-a-dj)
+13. [Audio Pipeline & Pre-fetching](#13-audio-pipeline--pre-fetching)
+14. [Language & Instrumental Support](#14-language--instrumental-support)
+15. [Dimension-Based LLM Prompting](#15-dimension-based-llm-prompting)
+16. [ACE-Step 1.5 Integration](#16-ace-step-15-integration)
+17. [Advanced Options](#17-advanced-options)
+18. [Save Track Feature](#18-save-track-feature)
+19. [Reactions Feature](#19-reactions-feature)
+20. [Launch Scripts](#20-launch-scripts)
+21. [Memory, Duration & Performance](#21-memory-duration--performance)
+22. [Remote Access (Cloudflare Tunnel)](#22-remote-access-cloudflare-tunnel)
+23. [Security Headers](#23-security-headers)
+24. [Debugging & Logging](#24-debugging--logging)
+25. [Design System](#25-design-system)
 
 ---
 
 ## 1. Project Overview
 
-**Generative Radio** is a fully local, offline AI radio web app. Users select a genre, mood keywords, vocal language, and optional personal feeling — then the app generates and plays an endless stream of original AI-composed songs.
+**Generative Radio** is a fully local, offline AI radio app. Users select a genre, mood keywords, vocal language, and optional personal feeling — then the app generates and plays an endless stream of original AI-composed songs. Available as a **web app** (React + Vite) and a **mobile app** (Expo / React Native for iOS and Android).
 
 ### Core Loop
 
@@ -56,7 +58,9 @@
 
 ### Multi-Listener Model
 
-Multiple browser clients can connect simultaneously. The first **local-network** connection becomes the **controller** (full UI: genre selection, start/stop, save track). Remote visitors (via Cloudflare tunnel) are always **viewers** (read-only player, real-time audio sync). Viewers can request the DJ slot to influence what plays next (see §11). When the controller disconnects, the next local viewer is automatically promoted.
+Multiple browser clients can connect simultaneously. The first **local-network** connection becomes the **controller** (full UI: genre selection, start/stop, save track). Remote visitors (via Cloudflare tunnel) are always **viewers** (read-only player, DJ button available). When the controller disconnects, the next local viewer is automatically promoted.
+
+The **mobile app** always joins as a viewer — it is a listening-only client with no session control capability.
 
 ---
 
@@ -66,12 +70,17 @@ Multiple browser clients can connect simultaneously. The first **local-network**
 graph TD
     subgraph Browser["Web Browser · React 19 + Vite 6 + TypeScript 5"]
         GS["GenreSelector<br/><i>controller only</i><br/>Genre pills, mood categories,<br/>language, feeling, advanced options"]
-        RP["RadioPlayer<br/>Audio with blob pre-fetch<br/>Equalizer, progress bar<br/>Activity log, Save track<br/>Viewer list, DJ button"]
+        RP["RadioPlayer<br/>Audio with blob pre-fetch<br/>Equalizer, progress bar<br/>Activity log, Save track<br/>Reactions, Viewer list, DJ button"]
         DJ["DJPanel<br/><i>modal · any client</i><br/>DJ name, genre, mood, language"]
     end
 
+    subgraph Mobile["Mobile App · Expo / React Native"]
+        MRP["RadioPlayer<br/>expo-audio playback<br/>Silence bridge, lock screen controls<br/>Background download, AppState handling"]
+        MDJ["DJPanel<br/>modal · viewer DJ slot"]
+    end
+
     subgraph Backend["Python Backend · FastAPI · port 5555"]
-        RO["RadioOrchestrator<br/>Async radio loop, pre-buffering<br/>Controller/viewer roles<br/>DJ mode, seed pinning<br/>Progressive duration ramp"]
+        RO["RadioOrchestrator<br/>Async radio loop, pre-buffering<br/>Controller/viewer roles<br/>DJ mode, reactions<br/>Progressive duration ramp"]
         OC["OllamaClient<br/><i>llm.py</i><br/>5-dimension prompt generation"]
         AC["ACEStepClient<br/><i>acestep_client.py</i><br/>submit → poll → download<br/>CoT disabled, thinking=true"]
         RO --> OC
@@ -89,6 +98,10 @@ graph TD
     DJ -- "WS: dj_claim / dj_submit" --> Backend
     Browser -- "GET /api/audio/{id}" --> Backend
     Browser -- "POST /api/tracks/{id}/save" --> Backend
+    Browser -- "POST /api/tracks/{id}/react" --> Backend
+    Mobile -- "WebSocket /ws<br/>track_ended, ping, dj_claim/submit" --> Backend
+    Mobile -- "GET /api/audio/{id}" --> Backend
+    Mobile -- "POST /api/radio/track-ended" --> Backend
     OC --> Ollama
     AC --> ACEStep
 ```
@@ -102,9 +115,9 @@ flowchart TD
     C --> D["OllamaClient.generate_prompt()<br/>5-dimension structured text via Qwen3.5:4b<br/>style, instruments, mood, vocal_style, production"]
     D --> E["ACEStepClient.generate_song()<br/>thinking=true, CoT Caption/Metas disabled<br/>Optional: time_signature, model, seed"]
     E --> F["Audio bytes cached in memory<br/>TrackInfo broadcast to all clients"]
-    F --> G["All browsers play audio<br/>Orchestrator starts pre-generating NEXT song"]
-    G --> H["Next song ready<br/>WS: track_ready with isNext=true<br/>Frontend pre-fetches audio into blob URL"]
-    H --> I["Current track ends<br/>Frontend plays blob URL instantly<br/>Sends track_ended via WS"]
+    F --> G["All clients play audio<br/>Orchestrator starts pre-generating NEXT song"]
+    G --> H["Next song ready<br/>WS: track_ready with isNext=true<br/>Web frontend pre-fetches audio into blob URL<br/>Mobile downloads via background downloader"]
+    H --> I["Current track ends<br/>Web: plays blob URL instantly, sends track_ended WS<br/>Mobile: swaps player, sends HTTP POST track-ended fallback"]
     I --> J["Orchestrator swaps tracks<br/>Evicts old audio cache<br/>Starts next pre-generation"]
     J --> D
 ```
@@ -116,13 +129,16 @@ flowchart TD
 | Component | Technology | Version / Notes |
 |---|---|---|
 | **Frontend** | React + Vite + TypeScript | React 19, Vite 6, TS 5.7+ |
-| **Fonts** | Bebas Neue (display) + Space Grotesk (body) | Google Fonts |
+| **Fonts** | Bebas Neue (display) + Space Grotesk (body) | Google Fonts (web); expo-google-fonts (mobile) |
 | **Backend** | Python FastAPI | Python 3.11–3.12, FastAPI 0.115+ |
 | **LLM** | Ollama + qwen3.5:4b | Always 4b (~2.5 GB); sufficient for prompt generation |
 | **Music Gen** | ACE-Step 1.5 | MLX backend, turbo model, 8 inference steps (configurable) |
 | **Package Mgmt** | uv (Python / ACE-Step), pip (backend venv), npm (JS) | |
 | **Audio Format** | MP3 | Generated by ACE-Step, served via chunked streaming |
 | **Tunnel** | cloudflared (optional) | Named tunnel (fixed domain) or Quick Tunnel (random URL) |
+| **Mobile** | Expo SDK 55 + React Native 0.83 | Managed workflow, no native dirs before prebuild |
+| **Mobile Audio** | expo-audio | Background playback + lock screen controls |
+| **Mobile Download** | @kesha-antonov/react-native-background-downloader | Background HTTP download, iOS AppDelegate plugin |
 
 ### Python Dependencies (`backend/requirements.txt`)
 
@@ -155,6 +171,21 @@ psutil>=6.0.0
 
 Note: No PWA plugin. The app is a standard web app — no service worker, no installable manifest.
 
+### Key Mobile Dependencies (`mobile/package.json`)
+
+```json
+{
+  "expo": "55.0.x-canary",
+  "expo-audio": "55.0.x-canary",
+  "react-native": "0.83.4",
+  "@kesha-antonov/react-native-background-downloader": "^4.5.4",
+  "@react-navigation/native": "^7.x",
+  "@react-navigation/native-stack": "^7.x",
+  "@expo-google-fonts/bebas-neue": "*",
+  "@expo-google-fonts/space-grotesk": "*"
+}
+```
+
 ---
 
 ## 4. Project Structure
@@ -163,58 +194,91 @@ Note: No PWA plugin. The app is a standard web app — no service worker, no ins
 generative-radio/
 ├── backend/
 │   ├── main.py                # FastAPI app: REST endpoints, WebSocket handler, security middleware
-│   ├── radio.py               # RadioOrchestrator: async loop, pre-buffering, roles, DJ mode, watchdog
+│   ├── radio.py               # RadioOrchestrator: async loop, pre-buffering, roles, DJ mode, reactions, watchdog
 │   ├── llm.py                 # OllamaClient: 5-dimension prompt generation with feeling injection
 │   ├── acestep_client.py      # ACEStepClient: advanced options, CoT-disabled pipeline
-│   ├── models.py              # Pydantic models: SongPrompt (5 dimensions), TrackInfo, WSMessage
+│   ├── models.py              # Pydantic models: SongPrompt (5 dims), TrackInfo, WSMessage, ReactRequest
 │   ├── genres.py              # 36 genres, 60 keywords (4 mood categories + instrument), 12 languages
 │   ├── config.py              # Memory detection, model selection, progressive duration, mem_snapshot()
 │   └── requirements.txt
 ├── frontend/
 │   ├── index.html             # HTML entry + Google Fonts (Bebas Neue, Space Grotesk)
 │   ├── package.json
-│   ├── tsconfig.json
-│   ├── tsconfig.app.json
-│   ├── tsconfig.node.json
-│   ├── public/
-│   │   └── icons/             # App icons: icon-192.png, icon-512.png, apple-touch-icon.png
 │   ├── vite.config.ts         # Proxy /api→:5555, /ws→ws://:5555, allowedHosts; CSP headers
 │   └── src/
 │       ├── main.tsx
-│       ├── vite-env.d.ts
 │       ├── App.tsx            # Role-aware routing, session info, DJ name, mid-session reschedule
 │       ├── App.css            # Full stylesheet: fonts, genre pills, mood groups, advanced options
 │       ├── types.ts           # Track, Genre, Keyword, AdvancedOptions, SessionInfo, DJ types
 │       ├── components/
 │       │   ├── GenreSelector.tsx   # Genre pills, grouped moods, feeling, advanced options
-│       │   ├── RadioPlayer.tsx     # Player, activity log, save button, DJ button, viewer list
+│       │   ├── RadioPlayer.tsx     # Player, activity log, save button, reactions, DJ button, viewer list
 │       │   ├── DJPanel.tsx         # Modal: DJ name input + genre/mood/language selection
 │       │   └── StatusBar.tsx       # Status dot + message + spinner + listener count
 │       └── hooks/
-│           └── useRadio.ts        # WS lifecycle, blob pre-fetch, DJ mode, media session
+│           └── useRadio.ts        # WS lifecycle, blob pre-fetch, DJ mode, reactions, media session
+├── mobile/
+│   ├── app.json               # Expo config: iOS/Android settings, background modes, plugins
+│   ├── index.ts               # Expo entry point
+│   ├── metro.config.js        # Monorepo resolver: watches root + packages/shared
+│   ├── package.json
+│   ├── assets/
+│   │   ├── silence.mp3        # 20 KB silence file for iOS audio session bridge
+│   │   └── icons/             # App icons (iOS + Android adaptive)
+│   ├── plugins/
+│   │   └── withBackgroundDownloader.js  # Config plugin: injects iOS AppDelegate background URL session handler
+│   └── src/
+│       ├── App.tsx            # Font loading, audio mode init, AppNavigator
+│       ├── config.ts          # BACKEND_URL / WS_URL (dev: localhost, prod: radio.scrambler-lab.com)
+│       ├── navigation/
+│       │   └── AppNavigator.tsx    # Navigation container: RadioPlayer always shown, DJPanel modal
+│       ├── hooks/
+│       │   └── useRadio.ts        # expo-audio player, silence bridge, background download, AppState, lock screen
+│       ├── utils/
+│       │   └── downloadAudio.ts   # Background download to fixed file: track_current.mp3
+│       └── components/
+│           ├── RadioPlayer.tsx    # Mobile player UI: waveform, progress, transport, reactions, activity log
+│           ├── GenreSelector.tsx  # Genre/mood selector (viewer DJ role only — via DJPanel)
+│           ├── DJPanel.tsx        # DJ modal: genre, mood, language, feeling, name
+│           └── theme.ts           # Design tokens: colors, fonts, border-radius
+├── packages/
+│   └── shared/
+│       ├── package.json       # "@radio/shared" — imported by mobile via metro workspace resolution
+│       └── src/
+│           ├── index.ts
+│           └── types.ts       # Shared TypeScript types (WSMessage variants, etc.)
+├── patches/
+│   └── @kesha-antonov+react-native-background-downloader+4.5.4.patch
 ├── scripts/
 │   ├── setup.sh               # One-time: Homebrew, Ollama, LLM models, ACE-Step, venv, npm install
 │   ├── start.sh               # Dev launch: Ollama, ACE-Step, backend (--reload), Vite dev server, cloudflared
 │   └── start_prod.sh          # Prod launch: clears cache, npm run build, backend (no --reload), Vite preview
 ├── saved_tracks/              # Runtime: saved MP3 + JSON metadata (created on first save)
+├── tracks_with_user_action/   # Runtime: reaction data per track (created on first reaction)
 ├── docs/
 │   ├── BUILD_SPEC_V0.md
 │   ├── BUILD_SPEC_V1.md
 │   ├── acestep-enhanced-inputs-plan.md
 │   ├── acestep-thinking-mode-analysis.md
 │   ├── acestep-memory-vs-duration.md
+│   ├── android-setup-guide.md
+│   ├── apple-silicon-performance-tuning.md
 │   ├── cloudflare-named-tunnel-setup.md
 │   ├── everyone-can-be-a-dj.md
 │   ├── genre-mood-expansion-plan.md
+│   ├── ios-background-audio-investigation.md
+│   ├── ios-simulator-guide.md
 │   ├── llm-prompt-improvement-plan.md
+│   ├── mobile-app-plan.md
+│   ├── mobile-architecture-v2.md
 │   ├── multi-listener-controller-viewer.md
 │   ├── multiple-github-accounts-mac.md
 │   ├── plain-text-llm-output-architecture.md
+│   ├── research-local-ai-music-generation-mac.md
 │   ├── save-track-feature.md
-│   └── research-local-ai-music-generation-mac.md
+│   └── thumb-reaction-feature.md
 ├── BUILD_SPEC.md              # This file
-├── README.md
-└── .gitignore
+└── README.md
 ```
 
 ---
@@ -297,6 +361,9 @@ class TrackInfo(BaseModel):
     key_scale: str
     duration: int
     audio_url: str
+
+class ReactRequest(BaseModel):
+    action: ReactionAction   # Enum: "thumb_up" | "thumb_down"
 ```
 
 ### `genres.py`
@@ -336,6 +403,7 @@ class TrackInfo(BaseModel):
 - **DJ mode:** `dj_claim`, `dj_submit` handlers; cooldown timer (`dj_unlock_at`); active DJ name broadcast
 - **`reschedule`:** controller can change genres mid-session; cancels next track pre-generation and restarts with new settings
 - **`play_now` watchdog:** after a configurable timeout past expected track end, broadcasts `play_now` to force transition on clients that missed the `ended` event (iOS backgrounding, screen lock, audio interruption)
+- **Reactions:** `react()` and `get_reactions()` methods; per-track reaction state persisted to `tracks_with_user_action/`
 
 ### `main.py` — FastAPI Application
 
@@ -343,8 +411,11 @@ class TrackInfo(BaseModel):
 - `GET /api/genres` — genres, keywords, languages
 - `GET /api/advanced-options` — last-used advanced options (for late-joining viewers)
 - `GET /api/radio/status` — current state and track info
-- `GET /api/audio/{track_id}` — chunked MP3 streaming
+- `GET /api/audio/{track_id}` — chunked MP3 streaming (64 KB chunks, `Cache-Control: public max-age=3600`)
 - `POST /api/tracks/{track_id}/save` — save MP3 + JSON to `saved_tracks/` (local clients only)
+- `POST /api/tracks/{track_id}/react` — toggle thumb_up / thumb_down reaction (all clients)
+- `GET /api/tracks/{track_id}/reactions` — current reaction counts + caller's vote
+- `POST /api/radio/track-ended` — HTTP fallback for mobile clients that cannot send WS `track_ended` after sleep (delegates to same debounced handler)
 
 **Security:** `SecurityHeadersMiddleware` injects HSTS, CSP, X-Frame-Options, X-Content-Type-Options, and other security headers on every response. CORS allows only `localhost:5173`, `127.0.0.1:5173`, and the named tunnel domain.
 
@@ -382,6 +453,7 @@ class TrackInfo(BaseModel):
 - **Transport controls:** ⏪ −10s / ▶⏸ play-pause / ⏩ +10s — available to all clients whenever a track is loaded
 - Equalizer animation, progress bar
 - Activity log (last 8 progress entries)
+- **Reactions:** 👍 / 👎 buttons with live counts — all clients can react; toggle semantics
 - **Save Track button** (controller only) — `POST /api/tracks/{id}/save`
 - **Be the DJ button** (viewers, when DJ slot unlocked) — triggers `dj_claim` WS event
 - Viewer list with IPs and "listening since" (controller only)
@@ -407,6 +479,8 @@ Modal component (full-screen overlay). Opens when a viewer's `dj_claim` is grant
   // session control
   start, stop, updateSettings, saveTrack,
   audioRef,
+  // reactions
+  reactionState, reactToTrack,
   // DJ mode
   djLocked, djUnlockAt, activeDjName,
   djPanelOpen, claimDj, submitDj, closeDjPanel,
@@ -427,19 +501,110 @@ Modal component (full-screen overlay). Opens when a viewer's `dj_claim` is grant
 
 ---
 
-## 9. WebSocket Protocol
+## 9. Mobile App Implementation
+
+The mobile app lives in `mobile/` and is an **Expo managed-workflow** React Native app (no committed `ios/` or `android/` dirs — generated on demand via `npx expo prebuild`). It is always a **viewer** — it connects to the backend WebSocket, plays the stream, and supports the DJ slot, but has no controller functionality (no genre selector, no start/stop, no save track).
+
+### Architecture
+
+- **Navigation:** `AppNavigator` → always shows `RadioPlayer`; `DJPanel` is a modal overlay
+- **Audio:** `expo-audio` (`createAudioPlayer`) for MP3 playback + lock screen controls
+- **Download:** `@kesha-antonov/react-native-background-downloader` downloads the next track to a fixed local file (`documents/track_current.mp3`) while the current track plays
+- **Shared types:** `packages/shared` (monorepo package `@radio/shared`) imported via metro workspace resolution
+
+### `mobile/src/hooks/useRadio.ts`
+
+States: `idle | fetching | polling | playing | paused | error`
+
+**Silence bridge pattern:**
+- When a track ends (detected via `playbackStatusUpdate` listener), a looped `silence.mp3` is immediately started to keep the iOS audio session alive
+- The silence bridge runs while the next track is being fetched/downloaded (~30–120 s for AI generation)
+- Once the new player is ready, the silence player is stopped and the new track plays
+- Prevents iOS from reclaiming the audio session during long generation gaps
+
+**Background download:**
+- `downloadAudio.ts` uses `@kesha-antonov/react-native-background-downloader` to download the next track audio byte-for-byte to a fixed filename
+- On app wake (AppState `active`), any in-flight download task is re-attached to avoid duplicate fetches
+- `patches/@kesha-antonov+react-native-background-downloader+4.5.4.patch` applies a fix to the library
+
+**AppState handling:**
+- On foreground: resumes player if playing, re-starts progress polling, resets stuck mutexes
+- On background: relies on `UIBackgroundModes: audio` + `expo-audio` foreground service to keep playback alive
+
+**WebSocket:**
+- `ping` heartbeat every 20 s to keep connection alive during background
+- Auto-reconnects with exponential backoff (1 s → 16 s max)
+- `track_ended` is sent via both WS and HTTP fallback (`POST /api/radio/track-ended`) since the WS may not flush during iOS sleep
+
+**Lock screen controls:**
+- `player.setActiveForLockScreen(true, { title, artist, artworkUrl })` called on every new track
+- Transport: play/pause, seek ±10 s
+- One player at a time can control lock screen
+
+### `mobile/app.json` — Key iOS/Android Config
+
+```json
+{
+  "ios": {
+    "infoPlist": {
+      "UIBackgroundModes": ["audio", "fetch"],
+      "NSLocalNetworkUsageDescription": "...",
+      "NSBonjourServices": ["_http._tcp"],
+      "NSBluetoothAlwaysUsageDescription": "..."
+    }
+  },
+  "android": {
+    "permissions": [
+      "android.permission.INTERNET",
+      "android.permission.WAKE_LOCK",
+      "android.permission.FOREGROUND_SERVICE",
+      "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+    ]
+  },
+  "plugins": [
+    "./plugins/withBackgroundDownloader",
+    ["expo-audio", { "enableBackgroundPlayback": true }]
+  ]
+}
+```
+
+`enableBackgroundPlayback: true` is required — it injects the `AudioControlsService` foreground service declaration into Android's manifest and applies additional AVAudioSession wiring on iOS. Without it, Android audio stops after ~3 minutes.
+
+### `mobile/plugins/withBackgroundDownloader.js`
+
+Expo config plugin (applied at `npx expo prebuild` time). Injects the `handleEventsForBackgroundURLSession:completionHandler:` method into the iOS AppDelegate — required for `@kesha-antonov/react-native-background-downloader` to receive callbacks when the app is backgrounded.
+
+### Build & Test
+
+```bash
+cd mobile
+npm install
+npx expo prebuild --clean   # regenerates ios/ and android/ from app.json
+npx expo run:ios --device   # or: eas build --platform ios
+```
+
+**Important:** Background audio does NOT work in Expo Go or a development client build. Test on a production/archive build only.
+
+See `docs/ios-simulator-guide.md` for iOS setup and `docs/android-setup-guide.md` for Android.
+
+---
+
+## 10. WebSocket Protocol
 
 ### Client → Server Events
 
 ```json
-{ "event": "start", "data": { "genres": ["jazz"], "keywords": ["chill"], "language": "en", "feeling": "...", "advancedOptions": { "timeSignature": "4", "inferenceSteps": 8, "model": "turbo" } } }
+{ "event": "start", "data": { "genres": ["jazz"], "keywords": ["chill"], "language": "en", "feeling": "...", "advancedOptions": { "timeSignature": "4", "inferenceSteps": 8, "model": "turbo" }, "djName": "Alice" } }
 { "event": "stop" }
 { "event": "skip" }
 { "event": "track_ended" }
 { "event": "reschedule", "data": { "genres": ["rock"], "keywords": [], "language": "en", "feeling": "...", "advancedOptions": {...} } }
 { "event": "dj_claim" }
 { "event": "dj_submit", "data": { "genres": ["pop"], "keywords": ["upbeat"], "language": "en", "feeling": "...", "djName": "Alice" } }
+{ "event": "ping" }
 ```
+
+The `ping` event (mobile only) is a keep-alive heartbeat — the backend discards it silently.
 
 ### Server → Client Events
 
@@ -458,13 +623,14 @@ Progress stages: `llm_thinking` → `llm_done` → `acestep_start` → `acestep_
 
 ---
 
-## 10. Multi-Listener: Controller / Viewer Model
+## 11. Multi-Listener: Controller / Viewer Model
 
 | Connection | Role | UI |
 |---|---|---|
 | First **local-network** WebSocket | Controller | GenreSelector → RadioPlayer (full controls + save) |
 | All remote connections | Viewer | RadioPlayer (read-only, DJ button available) |
 | Local connections when controller already active | Viewer | RadioPlayer (read-only) |
+| Mobile app | Always Viewer | RadioPlayer (mobile UI, DJ button available) |
 
 Late-join state sync: viewers receive `role_assigned`, current `track_ready`, `status`, `dj_state`, and last-used `advanced-options` on connect. Controller promotion happens on disconnect (immediate or deferred during generation).
 
@@ -481,7 +647,7 @@ Only connections originating from a **private / loopback IP address** (RFC 1918:
 
 ---
 
-## 11. DJ Mode — "Everyone Can Be a DJ"
+## 12. DJ Mode — "Everyone Can Be a DJ"
 
 Any viewer can request the DJ slot when the cooldown has expired. The flow:
 
@@ -501,23 +667,33 @@ Any viewer can request the DJ slot when the cooldown has expired. The flow:
 
 ---
 
-## 12. Audio Pipeline & Pre-fetching
+## 13. Audio Pipeline & Pre-fetching
+
+### Web
 
 Server-side: LLM → ACE-Step → MP3 bytes cached in `audio_cache[track_id]` → `StreamingResponse` (64 KB chunks, `Cache-Control: public, max-age=3600`). Previous track evicted on transition.
 
-Also cached per track: `prompt_cache[track_id]` (SongPrompt), `track_info_cache[track_id]` (TrackInfo), `seed_cache[track_id]` (ACE-Step seed string) — used by the save track endpoint.
+Also cached per track: `prompt_cache[track_id]` (SongPrompt), `track_info_cache[track_id]` (TrackInfo), `seed_cache[track_id]` (ACE-Step seed string) — used by save track and reactions endpoints.
 
 Client-side: `track_ready(isNext=true)` triggers `fetch()` → `URL.createObjectURL(blob)`. On track end, `audio.src = blobUrl` for instant playback. Blob URLs revoked after use (active blob revoked after src swap, not before, to avoid HTMLAudioElement error state).
 
+### Mobile
+
+Mobile does not use the blob URL pattern. Instead:
+1. On `track_ready(isNext=true)`, `downloadAudio.ts` starts a background download to `documents/track_current.mp3`
+2. The download completes in the background (even while the screen is locked) via `@kesha-antonov/react-native-background-downloader`
+3. When the current track ends, the player is re-created with the local `file://` URI
+4. The silence bridge keeps the iOS audio session alive during the gap
+
 ---
 
-## 13. Language & Instrumental Support
+## 14. Language & Instrumental Support
 
 11 languages (English, Español, Français, Deutsch, Italiano, 中文, Ελληνικά, Suomi, Svenska, 日本語, 한국어) + "No Vocal" instrumental mode. Language flows through: user selection → WS start → LLM system prompt → ACE-Step `vocal_language`. Instrumental maps to `"unknown"` for ACE-Step.
 
 ---
 
-## 14. Dimension-Based LLM Prompting
+## 15. Dimension-Based LLM Prompting
 
 The LLM generates 5 dimension fields covering ACE-Step's 9 recommended caption dimensions:
 
@@ -537,7 +713,7 @@ The `@property tags` concatenates all 5 into a single caption for ACE-Step.
 
 ---
 
-## 15. ACE-Step 1.5 Integration
+## 16. ACE-Step 1.5 Integration
 
 ### Thinking Mode Configuration
 
@@ -558,7 +734,7 @@ See `docs/acestep-thinking-mode-analysis.md` for the full rationale.
 
 ---
 
-## 16. Advanced Options
+## 17. Advanced Options
 
 Controller-configurable per session, passed via WS `start` or `reschedule` events. Also returned by `GET /api/advanced-options` for late-joining clients:
 
@@ -577,7 +753,7 @@ Model values are auto-prefixed: `turbo` → `acestep-v15-turbo`.
 
 ---
 
-## 17. Save Track Feature
+## 18. Save Track Feature
 
 The controller can save the currently playing track via the **Save** button in RadioPlayer.
 
@@ -593,7 +769,30 @@ The controller can save the currently playing track via the **Save** button in R
 
 ---
 
-## 18. Launch Scripts
+## 19. Reactions Feature
+
+Any connected listener (controller or viewer, web or mobile) can react to the currently playing track.
+
+**Reaction types:** `thumb_up` / `thumb_down`
+
+**Toggle semantics:**
+- Sending the same reaction again removes the vote
+- Sending the opposite reaction switches sides (removes old vote, adds new)
+
+**Web frontend (`useRadio.ts`):**
+- `reactToTrack(action)` calls `POST /api/tracks/{id}/react`
+- `reactionState` contains `{ thumbUp: number, thumbDown: number, myVote: "thumb_up" | "thumb_down" | null }`
+- Reaction counts are also broadcast via WebSocket so all connected clients update in real time
+
+**Backend:**
+- `POST /api/tracks/{track_id}/react` — body: `{ "action": "thumb_up" | "thumb_down" }`, identified by resolved client IP
+- `GET /api/tracks/{track_id}/reactions` — returns counts + caller's current vote
+- Reaction state persisted to `tracks_with_user_action/{track_id}.json`
+- IP-based vote ownership; `asyncio.Lock` prevents concurrent write races
+
+---
+
+## 20. Launch Scripts
 
 ### `start.sh` — development (5 services)
 
@@ -619,7 +818,7 @@ All other steps (Ollama, ACE-Step, tunnel) are identical to `start.sh`.
 
 ---
 
-## 19. Memory, Duration & Performance
+## 21. Memory, Duration & Performance
 
 | Duration | Est. Metal Buffer | Safe on |
 |---|---|---|
@@ -641,7 +840,7 @@ Formula: `memory_GB(t) = 9.7 + (t − 60) × 0.197`
 
 ---
 
-## 20. Remote Access (Cloudflare Tunnel)
+## 22. Remote Access (Cloudflare Tunnel)
 
 **Named Tunnel (production):** Fixed domain `radio.scrambler-lab.com`. Requires one-time setup — see `docs/cloudflare-named-tunnel-setup.md`. `start.sh` detects `~/.cloudflared/config.yml` and runs `cloudflared tunnel run generative-radio`.
 
@@ -649,11 +848,11 @@ Formula: `memory_GB(t) = 9.7 + (t − 60) × 0.197`
 
 Both support WebSocket proxying natively. Configurable via `TUNNEL_NAME` and `TUNNEL_DOMAIN` env vars.
 
-**Security interaction:** Cloudflare injects the `CF-Connecting-IP` header on all tunnel traffic. The backend reads this header to obtain the real visitor IP and determine whether they are on the local network. Remote visitors are automatically restricted to the viewer role. See §10 for the full access restriction model.
+**Security interaction:** Cloudflare injects the `CF-Connecting-IP` header on all tunnel traffic. The backend reads this header to obtain the real visitor IP and determine whether they are on the local network. Remote visitors are automatically restricted to the viewer role. See §11 for the full access restriction model.
 
 ---
 
-## 21. Security Headers
+## 23. Security Headers
 
 Both the FastAPI backend (`SecurityHeadersMiddleware` in `main.py`) and the Vite dev/preview server (`vite.config.ts`) inject the same set of HTTP security headers:
 
@@ -672,7 +871,7 @@ Both the FastAPI backend (`SecurityHeadersMiddleware` in `main.py`) and the Vite
 
 ---
 
-## 22. Debugging & Logging
+## 24. Debugging & Logging
 
 ### Log Files
 
@@ -699,7 +898,7 @@ Components: `[main]`, `[radio]`, `[llm]`, `[acestep]`, `[config]`. Each track ge
 
 ---
 
-## 23. Design System
+## 25. Design System
 
 ### Fonts
 
@@ -709,6 +908,8 @@ Components: `[main]`, `[radio]`, `[llm]`, `[acestep]`, `[config]`. Each track ge
 | Song title | Bebas Neue | 28px | 1.5px letter-spacing |
 | "Presented by" footer | Bebas Neue | 12px | 1.5px letter-spacing |
 | All body/UI text | Space Grotesk | Various | 400–700 weights |
+
+Same fonts used in mobile via `@expo-google-fonts/bebas-neue` and `@expo-google-fonts/space-grotesk`.
 
 ### Color Tokens
 
@@ -729,3 +930,4 @@ Components: `[main]`, `[radio]`, `[llm]`, `[acestep]`, `[config]`. Each track ge
 - **Language chips:** Pill buttons, green selection, dashed border for instrumental
 - **Advanced options:** Collapsible section, pill buttons for discrete choices, range slider for inference steps
 - **DJ button:** Amber pill button, disabled with countdown timer when locked
+- **Reactions:** Thumb up/down icon buttons with live counts, highlighted when user has voted

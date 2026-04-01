@@ -1,6 +1,8 @@
 # Generative Radio
 
-A fully local, offline AI radio web app. Pick a genre, mood, vocal language, and describe what you're doing — the app generates and plays an endless stream of original AI-composed songs with no cloud APIs required.
+A fully local, offline AI radio app. Pick a genre, mood, vocal language, and describe what you're doing — the app generates and plays an endless stream of original AI-composed songs with no cloud APIs required.
+
+Available as a **web app** (React + Vite) and a **mobile app** (Expo / React Native) for iOS and Android.
 
 ## Requirements
 
@@ -80,6 +82,10 @@ The controller can navigate back to the genre selector at any time without stopp
 
 The controller can save the currently playing track to disk — both the MP3 and a JSON metadata file (title, genre, BPM, key, seed, lyrics, tags) are written to `saved_tracks/`. Remote viewers cannot trigger saves.
 
+## Reactions
+
+Any connected listener (controller or viewer) can react to the currently playing track with a thumb up or thumb down. Reactions use toggle semantics — pressing the same button again removes the vote; pressing the opposite side switches. Reaction counts are broadcast to all listeners in real time and persisted to disk.
+
 ## Supported languages
 
 English, Español, Français, Deutsch, Italiano, 中文, Ελληνικά, Suomi, Svenska, 日本語, 한국어, and a **No Vocal** (instrumental) mode.
@@ -108,15 +114,46 @@ See the [ACE-Step 1.5 Tutorial](https://github.com/ace-step/ACE-Step-1.5/blob/ma
 
 Both modes proxy all traffic including WebSockets. Viewers joining via the tunnel automatically get the read-only listener experience.
 
+## Mobile app
+
+The `mobile/` directory contains an Expo / React Native app for iOS and Android. The mobile app is always a **viewer** — it connects to the same backend WebSocket and plays the radio stream, but cannot control the session (no genre selector, no save track). It is designed for listening on the go while the desktop session drives generation.
+
+### Prerequisites
+
+- Xcode (iOS) or Android Studio (Android)
+- Node.js + npm
+- Expo CLI: `npm install -g expo-cli`
+
+### Build and run
+
+```bash
+cd mobile
+npm install
+npx expo prebuild          # generates ios/ and android/ from app.json
+npx expo run:ios --device  # or: eas build --platform ios
+```
+
+See `docs/ios-simulator-guide.md` for iOS setup and `docs/android-setup-guide.md` for Android setup.
+
+### Background audio
+
+The mobile app uses `expo-audio` with a **silence bridge** pattern to keep the iOS audio session alive during track transitions (AI generation can take 30–120 s). Background audio requires a production build — it does not work in Expo Go.
+
+After making changes to `app.json` (plugin config, permissions), run `npx expo prebuild --clean` before rebuilding.
+
+See `docs/ios-background-audio-investigation.md` for the full background audio analysis.
+
 ## Architecture
 
 | Service | Port | Description |
 |---|---|---|
-| Frontend | 5173 | React + Vite (dev HMR server or compiled preview, proxies /api and /ws) |
+| Frontend | 5173 | React + Vite (dev HMR or compiled preview, proxies /api and /ws) |
 | Backend | 5555 | FastAPI (REST + WebSocket) |
 | ACE-Step API | 8001 | Music generation (MLX / Apple Silicon) |
 | Ollama | 11434 | LLM inference |
 | Cloudflare Tunnel | — | Exposes port 5173 publicly (optional) |
+
+Mobile connects directly to the backend WebSocket (`wss://radio.scrambler-lab.com/ws` in production, `ws://localhost:5555/ws` in dev).
 
 See `BUILD_SPEC.md` for the full technical specification.
 
