@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { AppState, AppStateStatus } from 'react-native';
+import { AppState, AppStateStatus, Platform } from 'react-native';
 import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import type { AudioPlayer, InterruptionMode } from 'expo-audio';
 import {
@@ -20,6 +20,8 @@ import {
 } from '@radio/shared';
 import { BACKEND_URL, WS_URL } from '../config';
 import { downloadAudio } from '../utils/downloadAudio';
+import { fetchStatusNative, sendTrackEndedNative } from '../modules/backgroundHttp';
+import type { StatusResult } from '../modules/backgroundHttp';
 
 // ------------------------------------------------------------------ //
 // Types
@@ -129,6 +131,7 @@ export function useRadio(): UseRadioReturn {
   const playerRef = useRef<AudioPlayer | null>(null);        // active music player
   const silencePlayerRef = useRef<AudioPlayer | null>(null); // silence bridge
   const isBridgingRef = useRef(false);                       // silence bridge active?
+  const bgStatusCleanupRef = useRef<(() => void) | null>(null); // Android: cancel in-flight native status fetch listener
 
   // ------------------------------------------------------------------ //
   // expo-audio setup
@@ -206,6 +209,11 @@ export function useRadio(): UseRadioReturn {
       console.log('[Radio] track_ended sent via WS');
       return;
     }
+    // Android background: native module already fired track-ended — skip JS fetch which hangs in Doze.
+    if (Platform.OS === 'android' && isBackgroundRef.current) {
+      console.log('[Radio] track_ended skipped — already sent via native module (Android bg)');
+      return;
+    }
     // HTTP fallback when WS is dead (always in background mode)
     console.log('[Radio] track_ended via HTTP (bg:', isBackgroundRef.current, ')');
     try {
@@ -273,12 +281,129 @@ export function useRadio(): UseRadioReturn {
   }, []);
 
   // ------------------------------------------------------------------ //
+  // Platform-specific background strategies
+  // ------------------------------------------------------------------ //
+
+  /** Android-only: called when app enters background. Keeps playbackStatusUpdate
+   *  listener alive (Android needs it for didJustFinish) and pre-starts the silence
+   *  bridge so the foreground media service is uninterrupted through the transition. */
+  const handleBackgroundAndroid = useCallback(() => {
+    if (playerRef.current?.playing && !localPausedRef.current && !isBridgingRef.current) {
+      startSilenceBridge();
+      console.log('[BG] Android — silence bridge pre-started for service continuity');
+    }
+    console.log('[BG] Android — playbackStatusUpdate listener kept for track-end detection');
+  }, [startSilenceBridge]);
+
+  /** iOS-only: called when app enters background. Removes playbackStatusUpdate
+   *  listener to stop 500 ms JS wakeups that trigger cpulimit kill. Sets a backup
+   *  setTimeout near the expected track end (didJustFinish also arrives via
+   *  AVPlayerItemDidPlayToEndTime, independent of the listener). */
+  const handleBackgroundIOS = useCallback(() => {
+    playerSubRef.current?.remove();
+    playerSubRef.current = null;
+    const bgPlayer = playerRef.current;
+    if (bgPlayer && !localPausedRef.current) {
+      const remaining = ((bgPlayer.duration ?? 0) - (bgPlayer.currentTime ?? 0)) * 1000;
+      if (remaining > 0) {
+        bgTrackEndTimerRef.current = setTimeout(() => {
+          if (isBackgroundRef.current && !localPausedRef.current && !isFetchingRef.current) {
+            console.log('[BG] track-end backup timer fired — calling handleTrackEnded');
+            handleTrackEndedRef.current?.();
+          }
+        }, remaining + 3_000);
+        console.log('[BG] iOS — listener suspended, backup timer set for', Math.round(remaining / 1000), 's');
+      }
+    } else {
+      console.log('[BG] iOS — listener suspended (no active player)');
+    }
+  }, []);
+
+  /** iOS-only: called when app returns to foreground. Re-attaches the
+   *  playbackStatusUpdate listener that was removed on background. */
+  const handleForegroundIOS = useCallback((wasBackground: boolean) => {
+    if (!wasBackground || !playerRef.current || playerSubRef.current) return;
+    let wasPlayingResume = playerRef.current.playing;
+    playerSubRef.current = playerRef.current.addListener('playbackStatusUpdate', (status) => {
+      if (status.didJustFinish) {
+        console.log('[Audio] didJustFinish — bg:', isBackgroundRef.current, 'paused:', localPausedRef.current, 'fetching:', isFetchingRef.current);
+        if (!localPausedRef.current) handleTrackEndedRef.current?.();
+        return;
+      }
+      if (status.isLoaded && wasPlayingResume && !status.playing && !localPausedRef.current) {
+        console.warn('[Audio] ⚠️ player stopped unexpectedly — bg:', isBackgroundRef.current, 'isBuffering:', status.isBuffering, 'pos:', status.currentTime?.toFixed(1), '/', status.duration?.toFixed(1));
+      }
+      if (status.isLoaded) wasPlayingResume = status.playing;
+    });
+    console.log('[BG] iOS — playbackStatusUpdate listener restored');
+  }, []);
+
+  /** Android-only: process the native BackgroundHttp.statusResult event.
+   *  On success with a new track, calls fetchAndPlay(track) to reuse all
+   *  download+play logic while skipping the frozen JS fetch. */
+  const handleNativeStatusResult = useCallback((result: StatusResult) => {
+    bgStatusCleanupRef.current = null;
+    if (!result.ok) {
+      console.warn('[BG/Android] native status fetch failed:', result.error, '— retrying in 5 s');
+      isFetchingRef.current = false;
+      // setTimeout is unreliable in Doze, but we're in a native-event wake window —
+      // acceptable best-effort; foreground handleWake is the guaranteed fallback.
+      setTimeout(() => { if (isBackgroundRef.current) handleTrackEndedRef.current?.(); }, 5_000);
+      return;
+    }
+    let data: { currentTrack: Track | null; state: string };
+    try {
+      data = JSON.parse(result.body) as { currentTrack: Track | null; state: string };
+    } catch {
+      console.error('[BG/Android] failed to parse status response');
+      isFetchingRef.current = false;
+      return;
+    }
+    if (!data.currentTrack) {
+      console.log('[BG/Android] no track yet — retrying in 5 s');
+      isFetchingRef.current = false;
+      setTimeout(() => { if (isBackgroundRef.current) handleTrackEndedRef.current?.(); }, 5_000);
+      return;
+    }
+    if (data.currentTrack.id === currentTrackIdRef.current) {
+      console.log('[BG/Android] same track still active — retrying in 5 s');
+      isFetchingRef.current = false;
+      setTimeout(() => { if (isBackgroundRef.current) handleTrackEndedRef.current?.(); }, 5_000);
+      return;
+    }
+    // New track — hand off to fetchAndPlay with the prefetched track data.
+    // fetchAndPlay will skip the status HTTP fetch and go straight to download+play.
+    isFetchingRef.current = false; // fetchAndPlay re-acquires the mutex
+    console.log('[BG/Android] new track received —', data.currentTrack.songTitle, '— handing to fetchAndPlay');
+    fetchAndPlayRef.current?.(data.currentTrack);
+  }, []);
+
+  /** Android-only: track-ended path for background mode.
+   *  Uses native HTTP (BackgroundHttpModule) instead of JS fetch() which hangs in Doze. */
+  const handleTrackEndedAndroid = useCallback(() => {
+    if (localPausedRef.current || isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    startSilenceBridge(); // ensure bridge is running (may already be from background entry)
+    sendTrackEndedNative(`${BACKEND_URL}/api/radio/track-ended`); // fire-and-forget
+    setRadioState('fetching');
+    setStatusMessage('Loading track...');
+    const requestId = Date.now().toString();
+    console.log('[BG/Android] fetchStatus via native module — requestId:', requestId);
+    const cleanup = fetchStatusNative(
+      `${BACKEND_URL}/api/radio/status`,
+      requestId,
+      handleNativeStatusResult,
+    );
+    bgStatusCleanupRef.current = cleanup;
+  }, [handleNativeStatusResult, startSilenceBridge]);
+
+  // ------------------------------------------------------------------ //
   // Polling
   // ------------------------------------------------------------------ //
 
   // Use a ref to hold the latest fetchAndPlay to break the circular dep
   // between startPolling and fetchAndPlay.
-  const fetchAndPlayRef = useRef<(() => Promise<void>) | undefined>(undefined);
+  const fetchAndPlayRef = useRef<((prefetchedTrack?: Track) => Promise<void>) | undefined>(undefined);
 
   // Ref for handleTrackEnded so the playbackStatusUpdate listener always calls the latest version
   const handleTrackEndedRef = useRef<(() => void) | null>(null);
@@ -316,8 +441,9 @@ export function useRadio(): UseRadioReturn {
   // Core: fetchAndPlay
   // ------------------------------------------------------------------ //
 
-  const fetchAndPlay = useCallback(async () => {
-    console.log('[F&P] enter — bg:', isBackgroundRef.current, 'fetching:', isFetchingRef.current, 'paused:', localPausedRef.current);
+  // prefetchedTrack: Android background supplies this from native HTTP to skip JS fetch()
+  const fetchAndPlay = useCallback(async (prefetchedTrack?: Track) => {
+    console.log('[F&P] enter — bg:', isBackgroundRef.current, 'fetching:', isFetchingRef.current, 'paused:', localPausedRef.current, 'prefetched:', !!prefetchedTrack);
     if (isFetchingRef.current) {
       console.log('[F&P] mutex held, skipping');
       return;
@@ -328,10 +454,17 @@ export function useRadio(): UseRadioReturn {
     setErrorMessage(null);
 
     try {
-      console.log('[F&P] GET /api/radio/status…');
-      const res = await fetch(`${BACKEND_URL}/api/radio/status`);
-      if (!res.ok) throw new Error(`Status ${res.status}`);
-      const data = await res.json() as { currentTrack: Track | null; state: string };
+      let data: { currentTrack: Track | null; state: string };
+      if (prefetchedTrack) {
+        // Android background: track already fetched natively — skip JS fetch() which hangs in Doze
+        data = { currentTrack: prefetchedTrack, state: 'playing' };
+        console.log('[F&P] using prefetched track:', prefetchedTrack.id);
+      } else {
+        console.log('[F&P] GET /api/radio/status…');
+        const res = await fetch(`${BACKEND_URL}/api/radio/status`);
+        if (!res.ok) throw new Error(`Status ${res.status}`);
+        data = await res.json() as { currentTrack: Track | null; state: string };
+      }
       console.log('[F&P] status response — serverState:', data.state, 'trackId:', data.currentTrack?.id ?? 'null', 'currentLocal:', currentTrackIdRef.current);
 
       if (!data.currentTrack) {
@@ -469,17 +602,22 @@ export function useRadio(): UseRadioReturn {
   // ------------------------------------------------------------------ //
 
   const handleTrackEnded = useCallback(async () => {
-    console.log('[Radio] handleTrackEnded — track:', currentTrackIdRef.current, 'bg:', isBackgroundRef.current, 'paused:', localPausedRef.current, 'fetching:', isFetchingRef.current);
+    console.log('[Radio] handleTrackEnded — track:', currentTrackIdRef.current, 'bg:', isBackgroundRef.current, 'platform:', Platform.OS, 'paused:', localPausedRef.current, 'fetching:', isFetchingRef.current);
     if (localPausedRef.current) { console.log('[Radio] handleTrackEnded: skipped — paused'); return; }
     if (isFetchingRef.current) { console.log('[Radio] handleTrackEnded: skipped — already fetching'); return; }
-    // Start silence bridge immediately to keep iOS audio session alive during download
-    startSilenceBridge();
-    // Signal the server immediately so it starts generating the next track.
-    await sendTrackEnded();
-    console.log('[Radio] handleTrackEnded — calling fetchAndPlay');
-    await fetchAndPlay();
-    console.log('[Radio] handleTrackEnded — fetchAndPlay returned');
-  }, [fetchAndPlay, sendTrackEnded, startSilenceBridge]);
+
+    if (Platform.OS === 'android' && isBackgroundRef.current) {
+      // Android background: JS fetch() hangs in Doze — use native HTTP module instead.
+      handleTrackEndedAndroid();
+    } else {
+      // iOS (and Android foreground): standard path — silence bridge + JS fetch + play.
+      startSilenceBridge();
+      await sendTrackEnded();
+      console.log('[Radio] handleTrackEnded — calling fetchAndPlay');
+      await fetchAndPlay();
+      console.log('[Radio] handleTrackEnded — fetchAndPlay returned');
+    }
+  }, [fetchAndPlay, handleTrackEndedAndroid, sendTrackEnded, startSilenceBridge]);
 
   // Keep ref in sync so the playbackStatusUpdate listener always calls latest
   useEffect(() => {
@@ -692,34 +830,19 @@ export function useRadio(): UseRadioReturn {
         const wasBackground = isBackgroundRef.current;
         isBackgroundRef.current = false;
         startProgressTimer();
-        // Cancel backup track-end timer — the re-added listener will handle it.
+        // Cancel backup track-end timer.
         if (bgTrackEndTimerRef.current) {
           clearTimeout(bgTrackEndTimerRef.current);
           bgTrackEndTimerRef.current = null;
         }
-        // Re-attach playbackStatusUpdate listener that was removed on background.
-        if (wasBackground && playerRef.current && !playerSubRef.current) {
-          let wasPlayingResume = playerRef.current.playing;
-          playerSubRef.current = playerRef.current.addListener('playbackStatusUpdate', (status) => {
-            if (status.didJustFinish) {
-              console.log('[Audio] didJustFinish — bg:', isBackgroundRef.current, 'paused:', localPausedRef.current, 'fetching:', isFetchingRef.current);
-              if (!localPausedRef.current) handleTrackEndedRef.current?.();
-              return;
-            }
-            if (status.isLoaded && wasPlayingResume && !status.playing && !localPausedRef.current) {
-              console.warn('[Audio] ⚠️ player stopped unexpectedly — bg:', isBackgroundRef.current, 'isBuffering:', status.isBuffering, 'pos:', status.currentTime?.toFixed(1), '/', status.duration?.toFixed(1));
-            }
-            if (status.isLoaded) wasPlayingResume = status.playing;
-          });
-          console.log('[BG] playbackStatusUpdate listener restored');
-        }
-        // Reconnect whenever WS was closed (covers inactive→active and
-        // background→inactive→active paths). wsRef is null if we closed it
-        // in 'inactive'. The AppState 'change' event doesn't fire on initial
-        // mount (app is already active), so this never double-connects.
-        if (wsRef.current === null) {
-          connectWebSocket();
-        }
+        // Cancel any in-flight native status fetch listener (Android).
+        bgStatusCleanupRef.current?.();
+        bgStatusCleanupRef.current = null;
+        // iOS: re-attach playbackStatusUpdate listener removed on background entry.
+        // Android: listener was never removed, so this is a no-op there.
+        if (Platform.OS === 'ios') handleForegroundIOS(wasBackground);
+        // Reconnect WS (closed in 'inactive' on iOS, 'background' on Android).
+        if (wsRef.current === null) connectWebSocket();
         handleWake();
       } else if (nextState === 'background') {
         isBackgroundRef.current = true;
@@ -740,40 +863,18 @@ export function useRadio(): UseRadioReturn {
           clearTimeout(reconnectTimer.current);
           reconnectTimer.current = null;
         }
-        // Suspend poll timer — iOS may kill it anyway; handleWake restarts it
         stopPolling();
-        // Stop progress timer — no UI to update in background, and a 500 ms
-        // setInterval is enough for iOS to terminate the app after ~30 s.
         stopProgressTimer();
-        // Suspend playbackStatusUpdate listener — expo-audio fires this every
-        // 500 ms via a JS timer, keeping the JS thread alive and triggering
-        // iOS's ~30 s background task expiration. Remove it now; a backup
-        // setTimeout will cover track-end detection if the listener misses it.
-        // didJustFinish is also delivered via AVPlayerItemDidPlayToEndTime
-        // (native notification) so it may still arrive without the listener.
-        playerSubRef.current?.remove();
-        playerSubRef.current = null;
-        // Backup: schedule handleTrackEnded near the expected track end time
-        // in case the native notification doesn't reach JS in background.
-        const bgPlayer = playerRef.current;
-        if (bgPlayer && !localPausedRef.current) {
-          const remaining = ((bgPlayer.duration ?? 0) - (bgPlayer.currentTime ?? 0)) * 1000;
-          if (remaining > 0) {
-            bgTrackEndTimerRef.current = setTimeout(() => {
-              if (isBackgroundRef.current && !localPausedRef.current && !isFetchingRef.current) {
-                console.log('[BG] track-end backup timer fired — calling handleTrackEnded');
-                handleTrackEndedRef.current?.();
-              }
-            }, remaining + 3_000);
-            console.log('[BG] listener suspended, backup timer set for', Math.round(remaining / 1000), 's');
-          }
+        // Platform-specific background entry logic.
+        if (Platform.OS === 'ios') {
+          handleBackgroundIOS();
         } else {
-          console.log('[BG] listener suspended (no active player)');
+          handleBackgroundAndroid();
         }
       }
     });
     return () => sub.remove();
-  }, [handleWake, stopPolling, connectWebSocket, startProgressTimer, stopProgressTimer]);
+  }, [handleWake, stopPolling, connectWebSocket, startProgressTimer, stopProgressTimer, handleBackgroundIOS, handleBackgroundAndroid, handleForegroundIOS]);
 
   // ------------------------------------------------------------------ //
   // Public API
