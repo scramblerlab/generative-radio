@@ -16,8 +16,12 @@
       "bundleIdentifier": "com.generativeradio.app",
       "infoPlist": {
         "UIBackgroundModes": [
-          "audio"
-        ]
+          "audio",
+          "fetch"
+        ],
+        "NSLocalNetworkUsageDescription": "Generative Radio connects to a local server on your network to stream music.",
+        "NSBonjourServices": ["_http._tcp"],
+        "NSBluetoothAlwaysUsageDescription": "Allow access to Bluetooth to connect to wireless audio speakers and headphones."
       }
     },
     "android": {
@@ -41,7 +45,7 @@
     },
     "plugins": [
       "./plugins/withBackgroundDownloader",
-      "expo-audio"
+      ["expo-audio", { "enableBackgroundPlayback": true }]
     ]
   }
 }
