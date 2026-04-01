@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
-  StyleSheet, Animated, Easing,
+  StyleSheet, Animated, Easing, AppState, AppStateStatus,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -179,10 +179,26 @@ export function RadioPlayer({
   const insets = useSafeAreaInsets();
   const isPlaying = status === 'playing' && !localPaused;
 
+  // Stop JS-thread animations and timers when the app is backgrounded.
+  // useNativeDriver:false Animated loops + setInterval both burn ~60% CPU
+  // in background and trigger iOS cpulimit kills within ~54 seconds.
+  const [isBackground, setIsBackground] = useState(false);
+  const isBackgroundRef = useRef(false);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s: AppStateStatus) => {
+      const bg = s === 'background';
+      isBackgroundRef.current = bg;
+      setIsBackground(bg);
+    });
+    return () => sub.remove();
+  }, []);
+
   // Derive effective DJ locked state from timestamp (matches web logic)
   const [, setTick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    const id = setInterval(() => {
+      if (!isBackgroundRef.current) setTick((n) => n + 1);
+    }, 1000);
     return () => clearInterval(id);
   }, []);
   const nowSec = Date.now() / 1000;
@@ -227,7 +243,7 @@ export function RadioPlayer({
           )}
 
           {/* Now playing */}
-          <Waveform active={isPlaying} />
+          <Waveform active={isPlaying && !isBackground} />
 
           {track ? (
             <>
