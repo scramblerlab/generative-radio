@@ -341,13 +341,25 @@ class RadioOrchestrator:
         self._cancel_play_now_watchdog()
         self._track_ended_event.set()
 
-    async def on_track_ended(self) -> None:
-        """Called when the frontend reports the current track has finished playing.
+    async def on_track_ended(self, finished_track_id: str | None = None) -> None:
+        """Called when a client reports the current track has finished playing.
 
-        With N simultaneous listeners each sending track_ended, only the first
-        signal within _TRACK_ENDED_DEBOUNCE_S seconds is honoured; the rest are
-        silently dropped to prevent N-1 spurious track advances.
+        finished_track_id: the track ID the client just finished. If provided and
+        it no longer matches the current track, the signal is ignored as stale
+        (handles async mobile clients signalling minutes after a pipeline advance).
+
+        With N simultaneous listeners, only the first signal within
+        _DEBOUNCE_S seconds is honoured; the rest are silently dropped to
+        prevent N-1 spurious track advances.
         """
+        # Track-ID guard: ignore stale signals from clients that are behind
+        if finished_track_id and self.current_track and finished_track_id != self.current_track.id:
+            logger.info(
+                f"[radio] track_ended for {finished_track_id} but current is "
+                f"{self.current_track.id} — ignoring stale signal"
+            )
+            return
+
         _DEBOUNCE_S = 5.0
         now = asyncio.get_event_loop().time()
         if now - self._last_track_ended_at < _DEBOUNCE_S:
@@ -360,6 +372,19 @@ class RadioOrchestrator:
         logger.info("[radio] Track-ended signal accepted — advancing to next track")
         self._cancel_play_now_watchdog()
         self._track_ended_event.set()
+
+    def get_current_best_track(self) -> "TrackInfo | None":
+        """Return the best track for a client to play right now (non-blocking).
+
+        A) next_track ready → return it (pipeline will advance on first track_ended)
+        B) still generating → return current_track (client re-plays briefly)
+        Returns None if no session is active.
+        """
+        if self.state not in (RadioState.PLAYING, RadioState.BUFFERING):
+            return None
+        if self.next_track is not None:
+            return self.next_track
+        return self.current_track
 
     # ------------------------------------------------------------------ #
     # WebSocket-gated control (called from WS handler in main.py)
@@ -703,12 +728,12 @@ class RadioOrchestrator:
                 logger.info("[radio] Track ended — transitioning to next track")
 
                 if self.next_track is not None:
-                    # Happy path: next track was already pre-buffered and sent
-                    # to the frontend as isNext=True. The frontend is already
-                    # playing it — just update server state and keep going.
+                    # Happy path: next track was pre-buffered. Advance pipeline
+                    # and broadcast to all clients (web clients switch now;
+                    # mobile clients that already pulled it via HTTP ignore this).
                     logger.info(
                         f"[radio] Next track was pre-buffered: '{self.next_track.song_title}' "
-                        f"— frontend already playing it"
+                        f"— advancing pipeline and notifying clients"
                     )
                     old_id = self.current_track.id if self.current_track else None
                     self.current_track = self.next_track
@@ -718,6 +743,7 @@ class RadioOrchestrator:
                         asyncio.create_task(self._evict_after_delay(old_id))
                         logger.debug(f"[radio] Scheduled deferred eviction for: {old_id}")
                     self.state = RadioState.PLAYING
+                    await self._broadcast_track_ready(self.current_track, is_next=False)
                     await self._broadcast_status("playing", "Playing — generating next track...")
                     if self.current_track:
                         self._start_play_now_watchdog(self.current_track)
@@ -787,9 +813,8 @@ class RadioOrchestrator:
             self.next_track = track
             self._next_track_ready_event.set()
 
-            # Notify frontend — it caches this and plays immediately on track_ended
-            await self._broadcast_track_ready(track, is_next=True)
-            await self._broadcast_status("playing", "Playing — next track ready")
+            # Next track is held silently — clients pull it via HTTP when ready.
+            # No push broadcast: each client fetches on its own schedule.
 
             # Promote any deferred controller now that generation is complete
             if self._pending_promotion:
