@@ -280,15 +280,36 @@ async def react_to_track(track_id: str, body: ReactRequest, request: Request):
 
 
 @app.post("/api/radio/track-ended")
-async def http_track_ended():
+async def http_track_ended(track_id: str | None = None):
     """HTTP fallback for mobile clients that cannot send WS track_ended after sleep.
 
-    Delegates to the same on_track_ended() as the WS path, which has a 5-second
-    debounce — duplicate signals within 5s are silently ignored.
+    Accepts optional track_id query param so the server can ignore stale signals
+    from clients that are behind the current pipeline position.
+
+    Returns the best available track immediately:
+      A) next_track ready → returns it (client plays the new track)
+      B) next_track still generating → returns current_track (client re-plays briefly)
     """
-    logger.info("[main] POST /api/radio/track-ended (mobile HTTP fallback)")
-    await radio.on_track_ended()
-    return {"ok": True}
+    logger.info(f"[main] POST /api/radio/track-ended track_id={track_id}")
+    await radio.on_track_ended(finished_track_id=track_id)
+    track = radio.get_current_best_track()
+    if track is None:
+        return {"ok": True, "track": None}
+    return {"ok": True, "track": track.model_dump()}
+
+
+@app.get("/api/radio/next-track")
+async def get_next_track():
+    """Pull-based: returns the best available track to play next without side effects.
+
+    A) next_track buffered and ready → returns it
+    B) next_track still generating → returns current_track
+    Returns 404 if no session is active.
+    """
+    track = radio.get_current_best_track()
+    if track is None:
+        raise HTTPException(status_code=404, detail="No active session")
+    return {"track": track.model_dump()}
 
 
 @app.get("/api/tracks/{track_id}/reactions")
