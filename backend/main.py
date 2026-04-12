@@ -180,12 +180,16 @@ async def get_audio(track_id: str):
     serve the same file from its local cache when the pre-load element and
     the active player element both request the same URL.
     """
-    logger.debug(f"[main] GET /api/audio/{track_id}")
+    logger.info(f"[main] GET /api/audio/{track_id} — cache has {len(radio.audio_cache)} entries")
     audio_bytes = radio.audio_cache.get(track_id)
     if not audio_bytes:
-        logger.warning(f"[main] Audio not found for track_id: {track_id}")
+        logger.warning(
+            f"[main] Audio 404 for track_id={track_id} | "
+            f"current_track={radio.current_track.id if radio.current_track else 'none'} | "
+            f"cache_keys={list(radio.audio_cache.keys())}"
+        )
         raise HTTPException(status_code=404, detail="Track not found in cache")
-    logger.debug(f"[main] Serving {len(audio_bytes) / 1024:.1f} KB for track {track_id} (chunked)")
+    logger.info(f"[main] Serving {len(audio_bytes) / 1024:.1f} KB for track {track_id} (chunked)")
     return StreamingResponse(
         _iter_audio(audio_bytes),
         media_type="audio/mpeg",

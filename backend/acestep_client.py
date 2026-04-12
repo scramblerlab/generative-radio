@@ -153,7 +153,12 @@ class ACEStepClient:
                 )
                 # result is a JSON string — must be parsed again
                 result_list: list[dict] = json.loads(item["result"])
-                return result_list[0]
+                result = result_list[0]
+                logger.info(
+                    f"[acestep] {label}— result keys: {list(result.keys())} | "
+                    f"file: {result.get('file', '(missing)')}"
+                )
+                return result
 
             elif status == 2:
                 logger.error(f"[acestep] {label}— task FAILED after {elapsed:.1f}s")
@@ -168,16 +173,22 @@ class ACEStepClient:
     async def get_audio_bytes(self, audio_path: str, song_title: str = "") -> bytes:
         """GET /v1/audio?path=<audio_path> — download generated audio."""
         label = f"'{song_title}' " if song_title else ""
-        logger.info(f"[acestep] {label}— downloading audio: {audio_path}")
+        url = f"{self.base_url}/v1/audio?path={audio_path}"
+        logger.info(f"[acestep] {label}— downloading audio from: {url}")
         try:
             resp = await self.client.get("/v1/audio", params={"path": audio_path})
+            logger.info(
+                f"[acestep] {label}— download response: HTTP {resp.status_code} | "
+                f"content-type: {resp.headers.get('content-type', '(none)')} | "
+                f"content-length header: {resp.headers.get('content-length', '(none)')}"
+            )
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"[acestep] {label}— audio download failed: {e}", exc_info=True)
             raise
 
         size_kb = len(resp.content) / 1024
-        logger.info(f"[acestep] {label}— downloaded {size_kb:.1f} KB")
+        logger.info(f"[acestep] {label}— downloaded {size_kb:.1f} KB (actual body size)")
         return resp.content
 
     async def close(self) -> None:
@@ -229,7 +240,7 @@ class ACEStepClient:
         file_url: str = result["file"]
         parsed = urlparse(file_url)
         path_param = parse_qs(parsed.query).get("path", [""])[0]
-        logger.debug(f"[acestep] '{prompt.song_title}' — audio path: {path_param}")
+        logger.info(f"[acestep] '{prompt.song_title}' — audio file_url: {file_url!r} → path: {path_param!r}")
 
         t_dl = time.monotonic()
         audio_bytes = await self.get_audio_bytes(path_param, song_title=prompt.song_title)

@@ -1209,7 +1209,12 @@ class RadioOrchestrator:
 
     async def _broadcast_track_ready(self, track: TrackInfo, is_next: bool) -> None:
         label = "next (pre-buffered)" if is_next else "current (play now)"
-        logger.info(f"[radio] Broadcasting track_ready — '{track.song_title}' [{label}]")
+        in_cache = track.id in self.audio_cache
+        logger.info(
+            f"[radio] Broadcasting track_ready — '{track.song_title}' [{label}] | "
+            f"track_id={track.id} | audio_url={track.audio_url} | "
+            f"in_audio_cache={in_cache}"
+        )
         await self.broadcast(WSMessage(event="track_ready", data={"track": self._make_track_dict(track), "isNext": is_next}))
 
     async def _broadcast_status(self, state: str, message: str) -> None:

@@ -100,8 +100,10 @@ else
   MLX_METAL_JIT=1 \
   ACESTEP_DEBUG_STATS=1 \
   TOKENIZERS_PARALLELISM=false \
+  TQDM_DISABLE=1 \
+  ACESTEP_DISABLE_TQDM=1 \
     uv run acestep-api --host 127.0.0.1 --port 8001 \
-    > /tmp/generative-radio-acestep.log 2>&1 &
+    < /dev/null > /tmp/generative-radio-acestep.log 2>&1 &
   ACESTEP_PID=$!
   cd "$PROJECT_DIR"
   echo "  ACE-Step PID: $ACESTEP_PID  (log: /tmp/generative-radio-acestep.log)"
