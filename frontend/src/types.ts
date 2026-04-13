@@ -47,7 +47,7 @@ export interface SessionInfo {
 export interface AdvancedOptions {
   timeSignature?: string;    // "2", "3", "4", "6", or undefined (auto)
   inferenceSteps: number;    // 4–100, default 8
-  model: string;             // "turbo", "turbo-shift1", "turbo-shift3", "turbo-continuous"
+  model: string;             // "xl-turbo", "turbo", "turbo-shift1", "turbo-shift3", "turbo-continuous"
   thinking: boolean;         // default true — semantic audio code generation
   useCotCaption: boolean;    // default true
   useCotMetas: boolean;      // default true

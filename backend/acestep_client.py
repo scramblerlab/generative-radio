@@ -156,6 +156,8 @@ class ACEStepClient:
                 result = result_list[0]
                 logger.info(
                     f"[acestep] {label}— result keys: {list(result.keys())} | "
+                    f"dit_model: {result.get('dit_model', '(missing)')} | "
+                    f"lm_model: {result.get('lm_model', '(missing)')} | "
                     f"file: {result.get('file', '(missing)')}"
                 )
                 return result
