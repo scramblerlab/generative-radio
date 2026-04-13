@@ -19,6 +19,7 @@ const TIME_SIGNATURES = [
 ];
 
 const DIT_MODELS = [
+  { value: 'xl-turbo', label: 'xl-turbo' },
   { value: 'turbo', label: 'turbo' },
   { value: 'turbo-shift1', label: 'turbo-shift1' },
   { value: 'turbo-shift3', label: 'turbo-shift3' },
@@ -55,7 +56,7 @@ export function GenreSelector({ onStart, onBackToPlayer, currentTrack }: GenreSe
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [timeSignature, setTimeSignature] = useState('');
   const [inferenceSteps, setInferenceSteps] = useState(DEFAULT_INFERENCE_STEPS);
-  const [ditModel, setDitModel] = useState('turbo');
+  const [ditModel, setDitModel] = useState('xl-turbo');
   const [thinking, setThinking] = useState(true);
   const [useCotCaption, setUseCotCaption] = useState(true);
   const [useCotMetas, setUseCotMetas] = useState(true);
