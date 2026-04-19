@@ -579,6 +579,33 @@ export function useRadio(): UseRadioReturn {
       setAudioDuration(null);
       fetchReactions(track.id);
 
+      // iOS background: undo the listener attachment above and set a fresh backup
+      // timer for the new track. fetchAndPlay re-attaches the listener unconditionally,
+      // but in background the listener causes JS wakeups and didJustFinish delivery
+      // is unreliable once iOS throttles the JS bridge. The backup timer (same approach
+      // as handleBackgroundIOS on initial background entry) is the only reliable
+      // track-end signal for tracks 2, 3, … in a background session.
+      if (Platform.OS === 'ios' && isBackgroundRef.current) {
+        playerSubRef.current?.remove();
+        playerSubRef.current = null;
+        if (bgTrackEndTimerRef.current) {
+          clearTimeout(bgTrackEndTimerRef.current);
+          bgTrackEndTimerRef.current = null;
+        }
+        const trackDurationMs = (track.duration ?? 0) * 1000;
+        if (trackDurationMs > 0) {
+          bgTrackEndTimerRef.current = setTimeout(() => {
+            if (isBackgroundRef.current && !localPausedRef.current && !isFetchingRef.current) {
+              console.log('[BG] track-end backup timer (bg-transition) fired — calling handleTrackEnded');
+              handleTrackEndedRef.current?.();
+            }
+          }, trackDurationMs + 3_000);
+          console.log('[BG] iOS — listener re-suspended after bg-transition, backup timer set for', Math.round(trackDurationMs / 1000), 's');
+        } else {
+          console.warn('[BG] iOS — track.duration missing; didJustFinish is the only fallback');
+        }
+      }
+
     } catch (err) {
       console.error('[F&P] FAILED (bg:', isBackgroundRef.current, '):', err);
       setRadioState('error');
