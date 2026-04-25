@@ -95,6 +95,7 @@ export function useRadio(): UseRadioReturn {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelay = useRef(RECONNECT_BASE_MS);
   const isActiveRef = useRef(false);                      // True while radio should maintain WS
+  const nextTrackPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ------------------------------------------------------------------ //
   // Blob URL lifecycle helpers
@@ -263,50 +264,67 @@ export function useRadio(): UseRadioReturn {
       });
   }, [clearPreloadBlob]);
 
-  const handleTrackEnded = useCallback(() => {
-    const blobReady = preloadBlobUrlRef.current !== null;
-    console.log(
-      '[Audio] Track ended —',
-      nextTrackRef.current ? `next track: "${nextTrackRef.current.songTitle}"` : 'no next track cached',
-      `| blob pre-fetched: ${blobReady}`
-    );
-    setProgress(0);
+  const stopNextTrackPoll = useCallback(() => {
+    if (nextTrackPollRef.current) {
+      clearTimeout(nextTrackPollRef.current);
+      nextTrackPollRef.current = null;
+    }
+  }, []);
 
-    // Notify the backend regardless of which path we take
-    sendWS({ event: 'track_ended' });
-
-    if (nextTrackRef.current) {
-      // Happy path: next track metadata is ready (blob may or may not be ready)
-      const next = nextTrackRef.current;
-      nextTrackRef.current = null;
-      setNextReady(false);
-      setStatus('playing');
-      // Reset reaction state for the new track (track_ready won't fire for pre-queued tracks)
-      const resetReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
-      setReactionState(resetReaction);
-      reactionStateRef.current = resetReaction;
-      fetch(`/api/tracks/${next.id}/reactions`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data: { thumb_up: number; thumb_down: number; userReaction: string | null } | null) => {
-          if (data) {
-            const fetched: ReactionState = {
-              thumbUp: data.thumb_up,
-              thumbDown: data.thumb_down,
-              userReaction: data.userReaction as ReactionState['userReaction'],
-            };
-            setReactionState(fetched);
-            reactionStateRef.current = fetched;
+  const pollForNextTrack = useCallback(() => {
+    const attempt = () => {
+      fetch('/api/radio/status')
+        .then((res) => {
+          if (!res.ok) throw new Error(`Status ${res.status}`);
+          return res.json() as Promise<{ currentTrack: Track | null; state: string }>;
+        })
+        .then((data) => {
+          if (data.currentTrack && data.currentTrack.id !== currentTrackRef.current?.id) {
+            stopNextTrackPoll();
+            const next = data.currentTrack;
+            nextTrackRef.current = null;
+            setNextReady(false);
+            setStatus('playing');
+            setStatusMessage('');
+            const reset: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
+            setReactionState(reset);
+            reactionStateRef.current = reset;
+            fetch(`/api/tracks/${next.id}/reactions`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((d: { thumb_up: number; thumb_down: number; userReaction: string | null } | null) => {
+                if (d) {
+                  const fetched: ReactionState = { thumbUp: d.thumb_up, thumbDown: d.thumb_down, userReaction: d.userReaction as ReactionState['userReaction'] };
+                  setReactionState(fetched);
+                  reactionStateRef.current = fetched;
+                }
+              })
+              .catch(() => {});
+            playTrack(next);
+          } else {
+            // Server still on same track or generating — retry in 1 s
+            nextTrackPollRef.current = setTimeout(attempt, 1_000);
           }
         })
-        .catch(() => {});
-      playTrack(next);
-    } else {
-      // Buffering path: waiting for server to send the next track
-      console.log('[Radio] No next track cached — entering buffering state');
-      setStatus('buffering');
-      setStatusMessage('Buffering next track...');
-    }
-  }, [sendWS, playTrack]);
+        .catch(() => {
+          nextTrackPollRef.current = setTimeout(attempt, 2_000);
+        });
+    };
+    attempt();
+  }, [stopNextTrackPoll, playTrack]);
+
+  const handleTrackEnded = useCallback(() => {
+    console.log('[Audio] Track ended — fetching next track from server');
+    setProgress(0);
+
+    // Notify the backend so it can advance its pipeline and start generating the next slot
+    sendWS({ event: 'track_ended' });
+
+    nextTrackRef.current = null;
+    setNextReady(false);
+    setStatus('buffering');
+    setStatusMessage('Loading next track...');
+    pollForNextTrack();
+  }, [sendWS, pollForNextTrack]);
 
   // ------------------------------------------------------------------ //
   // WebSocket connection
@@ -346,10 +364,10 @@ export function useRadio(): UseRadioReturn {
         const { track, isNext } = msg.data as unknown as TrackReadyData;
 
         if (!isNext) {
-          // Server says: play this track now (first track or buffering-recovery path).
-          // Clear nextTrackRef — the buffering path sends isNext=true then isNext=false
-          // for the same track; without this clear, handleTrackEnded would replay it.
+          // Server sends this only on session start (first track) or WS reconnect snapshot.
+          // Clients advance on their own timeline via pollForNextTrack() — not via server push.
           console.log('[Radio] track_ready (current) —', track.songTitle);
+          stopNextTrackPoll(); // cancel any in-flight poll — server just told us what to play
           nextTrackRef.current = null;
           setNextReady(false);
           setStatus('playing');
@@ -387,13 +405,6 @@ export function useRadio(): UseRadioReturn {
               }
             })
             .catch((err) => console.warn('[Reactions] Failed to fetch initial reactions:', err));
-        } else {
-          // Server says: this is the next track — start pre-fetching its audio bytes
-          // immediately so they're ready in memory before the current track ends.
-          console.log('[Radio] track_ready (next, pre-buffering) —', track.songTitle);
-          nextTrackRef.current = track;
-          setNextReady(true);
-          prefetchNextTrack(track);
         }
       } else if (msg.event === 'status') {
         const { state, message, nextReady: nr } = msg.data as unknown as StatusData;
@@ -473,7 +484,7 @@ export function useRadio(): UseRadioReturn {
       // onclose fires right after onerror; reconnect logic lives there
       console.error('[WS] Socket error — waiting for onclose to trigger reconnect');
     };
-  }, [playTrack, prefetchNextTrack]);
+  }, [stopNextTrackPoll, playTrack]);
 
   // Mount: start WS; unmount: tear down
   useEffect(() => {
@@ -596,14 +607,16 @@ export function useRadio(): UseRadioReturn {
   ) => {
     console.log('[Radio] Updating settings mid-session — genres:', genres, 'language:', language);
     // Do NOT touch audioRef or activeBlobUrl — current track keeps playing
+    stopNextTrackPoll();
     setNextReady(false);
     nextTrackRef.current = null;
     clearPreloadBlob(); // Revoke pre-fetched blob for old next track (will be discarded)
     sendWS({ event: 'reschedule', data: { genres, keywords, language, feeling, advancedOptions } });
-  }, [clearPreloadBlob, sendWS]);
+  }, [stopNextTrackPoll, clearPreloadBlob, sendWS]);
 
   const stop = useCallback(async () => {
     console.log('[Radio] Stop requested');
+    stopNextTrackPoll();
     audioRef.current?.pause();
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = null;
@@ -617,7 +630,7 @@ export function useRadio(): UseRadioReturn {
     setProgress(0);
 
     sendWS({ event: 'stop' });
-  }, [clearPreloadBlob, clearActiveBlob, sendWS]);
+  }, [stopNextTrackPoll, clearPreloadBlob, clearActiveBlob, sendWS]);
 
   const saveTrack = useCallback(async (trackId: string): Promise<void> => {
     const res = await fetch(`/api/tracks/${trackId}/save`, { method: 'POST' });
