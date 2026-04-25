@@ -236,34 +236,6 @@ export function useRadio(): UseRadioReturn {
     }
   }, []);
 
-  /**
-   * Pre-fetch the next track's audio bytes and store as a blob URL.
-   * Called as soon as the server signals that the next track is ready.
-   * The download runs entirely in the background while the current track plays.
-   */
-  const prefetchNextTrack = useCallback((track: Track) => {
-    clearPreloadBlob(); // Clear any stale pre-fetch from a previous cycle
-    const t0 = performance.now();
-    console.log('[Audio] Pre-fetch starting for:', track.songTitle, '—', track.audioUrl);
-
-    fetch(track.audioUrl)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.blob();
-      })
-      .then((blob) => {
-        const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-        preloadBlobUrlRef.current = URL.createObjectURL(blob);
-        console.log(
-          `[Audio] Pre-fetch complete for "${track.songTitle}" in ${elapsed}s` +
-          ` — ${(blob.size / 1024).toFixed(0)} KB buffered in memory`
-        );
-      })
-      .catch((err) => {
-        console.error('[Audio] Pre-fetch failed for', track.songTitle, ':', err);
-      });
-  }, [clearPreloadBlob]);
-
   const stopNextTrackPoll = useCallback(() => {
     if (nextTrackPollRef.current) {
       clearTimeout(nextTrackPollRef.current);
