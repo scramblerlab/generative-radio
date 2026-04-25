@@ -479,9 +479,9 @@ class RadioOrchestrator:
             self._start_prebuffer()
             await self._broadcast_status("playing", "Settings updated — generating next track...")
         elif prebuffer_active:
-            # In-flight generation continues with old settings; new settings apply next cycle
-            logger.info("[radio] Prebuffer in-flight — settings queued, will apply after generation completes")
-            await self._broadcast_status("playing", "Settings queued — current track finishing generation...")
+            # _start_prebuffer() will apply settings in-place on next call (track transition).
+            logger.info("[radio] Prebuffer in-flight — settings queued, will apply at next generation")
+            await self._broadcast_status("playing", "Settings queued — will apply on next generation...")
         else:
             # next_track already buffered (old settings) — it plays next, then new settings kick in
             logger.info("[radio] Next track already buffered — settings queued, will apply on next generation")
@@ -585,25 +585,29 @@ class RadioOrchestrator:
     def _start_prebuffer(self) -> None:
         """Ensure the generation chain is running to fill any empty pipeline slots.
 
-        If a chain is already in-flight and no settings change is pending, it will
-        self-route into the newly emptied slot — nothing to do.  Only cancel and
-        restart when settings changed (so the next generation uses new genres/keywords).
+        If a chain is already in-flight it will self-route into any newly emptied
+        slot — nothing to do.  If settings changed, apply them in-place so the next
+        generation in the chain picks them up without discarding already-queued tracks.
+        Only start a new chain when none is running.
         """
         if self._prebuffer_task and not self._prebuffer_task.done():
-            if not self._pending_settings:
+            if self._pending_settings:
+                # Apply new settings now so the next chained generation uses them.
+                # Keep already-queued tracks — the user is OK with a brief delay before
+                # the new genre takes effect.
+                self._apply_pending_settings()
+                logger.info(
+                    f"[pipeline] Settings applied in-place — chain continues, "
+                    f"new settings take effect at next generation {self._pipeline_str()}"
+                )
+            else:
                 logger.info(f"[pipeline] Chain already live — skipping restart {self._pipeline_str()}")
-                return  # chain is live; it will self-route into the empty slot
-            # Settings changed: cancel chain and restart with new settings below
-            logger.info(f"[pipeline] Settings changed — cancelling chain and restarting {self._pipeline_str()}")
+            return
 
         self._cancel_prebuffer()
 
         if self._pending_settings:
             self._apply_pending_settings()
-            # Settings reset clears history — discard queued tracks to avoid stale content
-            # (_cancel_prebuffer already cleared them, but be explicit for clarity)
-            self._queued_next_track = None
-            self._queued2_next_track = None
 
         logger.info(f"[pipeline] Starting generation chain {self._pipeline_str()}")
         self._prebuffer_task = asyncio.create_task(
