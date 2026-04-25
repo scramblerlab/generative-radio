@@ -541,15 +541,35 @@ export function useRadio(): UseRadioReturn {
           }
           return;
         }
-        // Log unexpected stop — only after player is fully loaded to avoid
-        // false positives from the initial buffering status event.
+        // Detect external pause/resume caused by the media widget (Android MediaSession
+        // or iOS lock-screen controls) which update native state without going through JS.
+        // Sync localPausedRef so togglePlayPause(), handleWake(), and didJustFinish guards
+        // all see consistent intent state.
         if (status.isLoaded && wasPlaying && !status.playing && !localPausedRef.current) {
-          console.warn(
-            '[Audio] ⚠️ player stopped unexpectedly — bg:', isBackgroundRef.current,
-            'playbackState:', (status as Record<string, unknown>).playbackState ?? '?',
-            'isBuffering:', status.isBuffering,
-            'pos:', status.currentTime?.toFixed(1), '/', status.duration?.toFixed(1)
-          );
+          if (status.isBuffering) {
+            // Momentary pause while buffering — not an external stop.
+            console.warn(
+              '[Audio] ⚠️ player buffering — bg:', isBackgroundRef.current,
+              'pos:', status.currentTime?.toFixed(1), '/', status.duration?.toFixed(1)
+            );
+          } else {
+            // Widget (or OS) paused/stopped the player externally — sync JS intent.
+            console.log(
+              '[Audio] Player stopped externally (widget/OS) — syncing pause state',
+              'bg:', isBackgroundRef.current,
+              'playbackState:', (status as Record<string, unknown>).playbackState ?? '?'
+            );
+            localPausedRef.current = true;
+            setLocalPaused(true);
+            setRadioState('paused');
+          }
+        }
+        // Detect external resume: widget played while user-intent was paused.
+        if (status.isLoaded && !wasPlaying && status.playing && localPausedRef.current) {
+          console.log('[Audio] Player resumed externally (widget/OS) — syncing play state');
+          localPausedRef.current = false;
+          setLocalPaused(false);
+          setRadioState('playing');
         }
         if (status.isLoaded) wasPlaying = status.playing;
       });
@@ -987,16 +1007,19 @@ export function useRadio(): UseRadioReturn {
     const p = playerRef.current;
     if (!p) return;
     try {
-      if (p.playing) {
-        p.pause();
-        setLocalPaused(true);
-        localPausedRef.current = true;
-        setRadioState('paused');
-      } else {
+      // Use localPausedRef (JS intent) rather than p.playing (native state) to decide
+      // the action. The media widget can change native state without updating JS refs,
+      // so p.playing may be stale and would cause the wrong action to fire.
+      if (localPausedRef.current) {
         p.play();
         setLocalPaused(false);
         localPausedRef.current = false;
         setRadioState('playing');
+      } else {
+        p.pause();
+        setLocalPaused(true);
+        localPausedRef.current = true;
+        setRadioState('paused');
       }
     } catch (err) {
       console.error('[Audio] togglePlayPause failed:', err);
