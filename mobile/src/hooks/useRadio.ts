@@ -770,8 +770,13 @@ export function useRadio(): UseRadioReturn {
 */
       if (msg.event === 'play_now') {
         // Backend watchdog — server thinks we should be playing.
-        console.log('[WS] play_now received — triggering fetchAndPlay');
-        if (!localPausedRef.current && !isFetchingRef.current) {
+        const { for_track_id } = msg.data as { for_track_id?: string };
+        console.log('[WS] play_now received for', for_track_id, '— current:', currentTrackIdRef.current);
+        if (
+          !localPausedRef.current &&
+          !isFetchingRef.current &&
+          (!for_track_id || currentTrackIdRef.current === for_track_id)
+        ) {
           fetchAndPlayRef.current?.();
         }
       } else if (msg.event === 'status') {
