@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import contextlib
 import ipaddress
 import json
@@ -132,6 +133,10 @@ class RadioOrchestrator:
         self._task: asyncio.Task | None = None
         self._prebuffer_task: asyncio.Task | None = None  # Background generation task
         self._play_now_task: asyncio.Task | None = None   # Watchdog: fire play_now if ended never arrives
+        
+        # Adaptive eviction / retention buffer properties
+        self._retention_buffer_size = int(os.getenv("TRACK_RETENTION_N", "2"))
+        self._eviction_queue: collections.deque = collections.deque(maxlen=self._retention_buffer_size)
         self._stop_event = asyncio.Event()
         self._track_ended_event = asyncio.Event()
         self._next_track_ready_event = asyncio.Event()
@@ -285,24 +290,21 @@ class RadioOrchestrator:
             self._play_now_task.cancel()
         self._play_now_task = None
 
-    async def _evict_after_delay(self, track_id: str, delay: float = 60.0) -> None:
-        """Evict a track from all caches after a grace period.
-
-        60 seconds gives mobile clients time to complete a download even when
-        the server has already advanced to the next track. The web frontend
-        creates a blob URL immediately on download so it is unaffected.
-        Note: reaction_metadata_cache is intentionally excluded — it persists
-        for the full session so users can react after a track ends.
-        """
-        try:
-            await asyncio.sleep(delay)
-        except asyncio.CancelledError:
-            return
-        self.audio_cache.pop(track_id, None)
-        self.prompt_cache.pop(track_id, None)
-        self.seed_cache.pop(track_id, None)
-        self.track_info_cache.pop(track_id, None)
-        logger.debug(f"[radio] Deferred eviction complete for track: {track_id}")
+    def _purge_evicted_tracks(self) -> None:
+        """Immediately evict tracks that have fallen out of the retention buffer.
+        
+        Replaces timer-based delay with a sliding-window approach (N=2).
+        Guarantees audio_bytes are available for any track within the window,
+        regardless of network jitter on mobile clients.
+        Note: reaction_metadata_cache is intentionally excluded so users can react after tracks end."""
+        active_ids = {t.id for t in [self.current_track, self.next_track] if t} | set(self._eviction_queue)
+        
+        for key in list(self.audio_cache.keys()):
+            if key not in active_ids:
+                self.audio_cache.pop(key)
+                self.prompt_cache.pop(key, None)
+                self.seed_cache.pop(key, None)
+                self.track_info_cache.pop(key, None)
 
     async def stop(self) -> None:
         """Stop the radio session and clean up resources."""
@@ -740,7 +742,8 @@ class RadioOrchestrator:
                     self.next_track = None
                     self._next_track_ready_event.clear()
                     if old_id:
-                        asyncio.create_task(self._evict_after_delay(old_id))
+                        self._eviction_queue.append(old_id)
+                        self._purge_evicted_tracks()
                         logger.debug(f"[radio] Scheduled deferred eviction for: {old_id}")
                     self.state = RadioState.PLAYING
                     await self._broadcast_track_ready(self.current_track, is_next=False)
@@ -764,7 +767,8 @@ class RadioOrchestrator:
                     old_id = self.current_track.id if self.current_track else None
                     self.current_track = track
                     if old_id:
-                        asyncio.create_task(self._evict_after_delay(old_id))
+                        self._eviction_queue.append(old_id)
+                        self._purge_evicted_tracks()
                         logger.debug(f"[radio] Scheduled deferred eviction for: {old_id}")
                     self.state = RadioState.PLAYING
 

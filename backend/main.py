@@ -183,6 +183,12 @@ async def get_audio(track_id: str):
     logger.info(f"[main] GET /api/audio/{track_id} — cache has {len(radio.audio_cache)} entries")
     audio_bytes = radio.audio_cache.get(track_id)
     if not audio_bytes:
+        # Tier 2 Fallback: Track was real but deeply evicted (client fell behind by > buffer window).
+        # Serve live state instead of hard 404 so mobile app can snap back to reality.
+        if track_id in radio.reaction_metadata_cache:
+            best_live_track = radio.get_current_best_track()
+            return {"status": "evicted", "syncNow": radio._make_track_dict(best_live_track) if best_live_track else None}
+
         logger.warning(
             f"[main] Audio 404 for track_id={track_id} | "
             f"current_track={radio.current_track.id if radio.current_track else 'none'} | "
