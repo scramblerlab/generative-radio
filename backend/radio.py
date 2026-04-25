@@ -641,15 +641,6 @@ class RadioOrchestrator:
                 ),
             )
 
-        if self.next_track:
-            await self._send_to(
-                ws,
-                WSMessage(
-                    event="track_ready",
-                    data={"track": self._make_track_dict(self.next_track), "isNext": True},
-                ),
-            )
-
         if self.state == RadioState.PLAYING:
             msg = "Playing — next track ready" if self.next_track else "Playing — generating next track..."
         elif self.state == RadioState.GENERATING:
@@ -775,11 +766,11 @@ class RadioOrchestrator:
                 logger.info("[radio] Track ended — transitioning to next track")
 
                 if self.next_track is not None:
-                    # Happy path: next track was pre-buffered. Shift all slots down,
-                    # evict the old track, broadcast, and continue the pipeline chain.
+                    # Happy path: next track was pre-buffered. Shift all slots down and
+                    # evict the old track. Clients advance on their own timeline — no push.
                     logger.info(
                         f"[radio] Next track was pre-buffered: '{self.next_track.song_title}' "
-                        f"— advancing pipeline and notifying clients"
+                        f"— advancing pipeline"
                     )
                     old_id = self.current_track.id if self.current_track else None
                     self.current_track = self.next_track
@@ -797,7 +788,6 @@ class RadioOrchestrator:
                         f"→ {self._pipeline_str()}"
                     )
                     self.state = RadioState.PLAYING
-                    await self._broadcast_track_ready(self.current_track, is_next=False)
                     await self._broadcast_status("playing", "Playing — generating next track...")
                     if self.current_track:
                         self._start_play_now_watchdog(self.current_track)
@@ -846,7 +836,6 @@ class RadioOrchestrator:
                     self.state = RadioState.PLAYING
 
                     logger.info(f"[radio] Buffering done — now playing: '{self.current_track.song_title}'")
-                    await self._broadcast_track_ready(self.current_track, is_next=False)
                     await self._broadcast_status("playing", "Playing — generating next track...")
                     self._start_play_now_watchdog(self.current_track)
 
