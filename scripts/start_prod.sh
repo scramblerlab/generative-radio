@@ -176,7 +176,7 @@ if [[ -n "$STALE_FRONTEND" ]]; then
 fi
 
 cd "$PROJECT_DIR/frontend"
-npm run preview > /tmp/generative-radio-frontend.log 2>&1 &
+npm run preview < /dev/null > /tmp/generative-radio-frontend.log 2>&1 &
 FRONTEND_PID=$!
 cd "$PROJECT_DIR"
 echo "  Preview PID: $FRONTEND_PID  (log: /tmp/generative-radio-frontend.log)"

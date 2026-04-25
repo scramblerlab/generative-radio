@@ -4,6 +4,7 @@ import contextlib
 import ipaddress
 import json
 import logging
+import os
 import random
 import time
 import uuid
@@ -114,7 +115,9 @@ class RadioOrchestrator:
 
         # Track management
         self.current_track: TrackInfo | None = None
-        self.next_track: TrackInfo | None = None   # Pre-buffered; already sent to frontend as isNext=True
+        self.next_track: TrackInfo | None = None         # Slot 1: track immediately after current
+        self._queued_next_track: TrackInfo | None = None  # Slot 2: track two ahead
+        self._queued2_next_track: TrackInfo | None = None # Slot 3: track three ahead
         self.audio_cache: dict[str, bytes] = {}       # track_id → raw MP3 bytes
         self.prompt_cache: dict[str, SongPrompt] = {}  # track_id → SongPrompt (for save)
         self.seed_cache: dict[str, str] = {}           # track_id → ACE-Step seed (for save)
@@ -249,6 +252,8 @@ class RadioOrchestrator:
             self._DJ_LOCK_S = float(self.advanced_options.get("djLockSeconds", self._DJ_LOCK_S))
         self.history = []
         self.next_track = None
+        self._queued_next_track = None
+        self._queued2_next_track = None
         self._stop_event.clear()
         self._track_ended_event.clear()
         self._next_track_ready_event.clear()
@@ -297,7 +302,11 @@ class RadioOrchestrator:
         Guarantees audio_bytes are available for any track within the window,
         regardless of network jitter on mobile clients.
         Note: reaction_metadata_cache is intentionally excluded so users can react after tracks end."""
-        active_ids = {t.id for t in [self.current_track, self.next_track] if t} | set(self._eviction_queue)
+        active_ids = (
+            {t.id for t in [self.current_track, self.next_track,
+                            self._queued_next_track, self._queued2_next_track] if t}
+            | set(self._eviction_queue)
+        )
         
         for key in list(self.audio_cache.keys()):
             if key not in active_ids:
@@ -326,6 +335,8 @@ class RadioOrchestrator:
         self.state = RadioState.STOPPED
         self.current_track = None
         self.next_track = None
+        self._queued_next_track = None
+        self._queued2_next_track = None
         self.audio_cache.clear()
         self.prompt_cache.clear()
         self.seed_cache.clear()
@@ -518,12 +529,27 @@ class RadioOrchestrator:
     # Internal helpers
     # ------------------------------------------------------------------ #
 
+    def _pipeline_str(self) -> str:
+        """Compact one-line snapshot of all 3 pipeline slots for log messages.
+
+        Example: [S1:'Midnight Drive' S2:'Solar Wind' S3:empty]
+        """
+        def _slot(track: "TrackInfo | None") -> str:
+            return f"'{track.song_title}'" if track else "empty"
+        return (
+            f"[S1:{_slot(self.next_track)} "
+            f"S2:{_slot(self._queued_next_track)} "
+            f"S3:{_slot(self._queued2_next_track)}]"
+        )
+
     def _cancel_prebuffer(self) -> None:
-        """Cancel any in-flight background track generation task."""
+        """Cancel any in-flight background track generation task and clear the pipeline."""
         if self._prebuffer_task and not self._prebuffer_task.done():
             self._prebuffer_task.cancel()
             logger.debug("[radio] Cancelled in-flight prebuffer task")
         self._prebuffer_task = None
+        self._queued_next_track = None
+        self._queued2_next_track = None
 
     def _apply_pending_settings(self) -> None:
         """Apply queued genre/keyword/language settings and reset history.
@@ -557,14 +583,29 @@ class RadioOrchestrator:
         )
 
     def _start_prebuffer(self) -> None:
-        """Cancel any existing prebuffer task and start a fresh one.
+        """Ensure the generation chain is running to fill any empty pipeline slots.
 
-        Applies any pending settings (queued by reschedule()) before starting
-        so the new generation uses the correct genre/keywords.
+        If a chain is already in-flight and no settings change is pending, it will
+        self-route into the newly emptied slot — nothing to do.  Only cancel and
+        restart when settings changed (so the next generation uses new genres/keywords).
         """
+        if self._prebuffer_task and not self._prebuffer_task.done():
+            if not self._pending_settings:
+                logger.info(f"[pipeline] Chain already live — skipping restart {self._pipeline_str()}")
+                return  # chain is live; it will self-route into the empty slot
+            # Settings changed: cancel chain and restart with new settings below
+            logger.info(f"[pipeline] Settings changed — cancelling chain and restarting {self._pipeline_str()}")
+
         self._cancel_prebuffer()
+
         if self._pending_settings:
             self._apply_pending_settings()
+            # Settings reset clears history — discard queued tracks to avoid stale content
+            # (_cancel_prebuffer already cleared them, but be explicit for clarity)
+            self._queued_next_track = None
+            self._queued2_next_track = None
+
+        logger.info(f"[pipeline] Starting generation chain {self._pipeline_str()}")
         self._prebuffer_task = asyncio.create_task(
             self._generate_and_buffer_next(), name="radio-prebuffer"
         )
@@ -730,21 +771,27 @@ class RadioOrchestrator:
                 logger.info("[radio] Track ended — transitioning to next track")
 
                 if self.next_track is not None:
-                    # Happy path: next track was pre-buffered. Advance pipeline
-                    # and broadcast to all clients (web clients switch now;
-                    # mobile clients that already pulled it via HTTP ignore this).
+                    # Happy path: next track was pre-buffered. Shift all slots down,
+                    # evict the old track, broadcast, and continue the pipeline chain.
                     logger.info(
                         f"[radio] Next track was pre-buffered: '{self.next_track.song_title}' "
                         f"— advancing pipeline and notifying clients"
                     )
                     old_id = self.current_track.id if self.current_track else None
                     self.current_track = self.next_track
-                    self.next_track = None
+                    self.next_track = self._queued_next_track          # Slot 2 → Slot 1
+                    self._queued_next_track = self._queued2_next_track  # Slot 3 → Slot 2
+                    self._queued2_next_track = None                    # Slot 3 now empty
                     self._next_track_ready_event.clear()
+                    if self.next_track:
+                        self._next_track_ready_event.set()
                     if old_id:
                         self._eviction_queue.append(old_id)
                         self._purge_evicted_tracks()
-                        logger.debug(f"[radio] Scheduled deferred eviction for: {old_id}")
+                    logger.info(
+                        f"[pipeline] Transition (happy): now='{self.current_track.song_title}' "
+                        f"→ {self._pipeline_str()}"
+                    )
                     self.state = RadioState.PLAYING
                     await self._broadcast_track_ready(self.current_track, is_next=False)
                     await self._broadcast_status("playing", "Playing — generating next track...")
@@ -761,21 +808,43 @@ class RadioOrchestrator:
                     if self._stop_event.is_set():
                         break
 
-                    track = self.next_track
-                    self.next_track = None
-                    self._next_track_ready_event.clear()
+                    if self.next_track is None:
+                        # RC3: generation failed; _next_track_ready_event was set by the error handler.
+                        # Restart the chain and re-wait — don't continue the outer loop, since the
+                        # track already ended and we can't wait for _track_ended_event again.
+                        logger.error("[radio] Buffering unblocked but next_track is None — restarting chain")
+                        self._start_prebuffer()
+                        self._next_track_ready_event.clear()
+                        await self._next_track_ready_event.wait()
+                        if self._stop_event.is_set():
+                            break
+                        if self.next_track is None:
+                            logger.error("[radio] Second generation failure — stopping radio")
+                            self.state = RadioState.STOPPED
+                            await self._broadcast_error("Failed to generate next track after retry")
+                            return
+
                     old_id = self.current_track.id if self.current_track else None
-                    self.current_track = track
+                    self.current_track = self.next_track
+                    self.next_track = self._queued_next_track          # Slot 2 → Slot 1
+                    self._queued_next_track = self._queued2_next_track  # Slot 3 → Slot 2
+                    self._queued2_next_track = None                    # Slot 3 now empty
+                    self._next_track_ready_event.clear()
+                    if self.next_track:
+                        self._next_track_ready_event.set()
                     if old_id:
                         self._eviction_queue.append(old_id)
                         self._purge_evicted_tracks()
-                        logger.debug(f"[radio] Scheduled deferred eviction for: {old_id}")
+                    logger.info(
+                        f"[pipeline] Transition (buffering): now='{self.current_track.song_title}' "
+                        f"→ {self._pipeline_str()}"
+                    )
                     self.state = RadioState.PLAYING
 
-                    logger.info(f"[radio] Buffering done — now playing: '{track.song_title}'")
-                    await self._broadcast_track_ready(track, is_next=False)
+                    logger.info(f"[radio] Buffering done — now playing: '{self.current_track.song_title}'")
+                    await self._broadcast_track_ready(self.current_track, is_next=False)
                     await self._broadcast_status("playing", "Playing — generating next track...")
-                    self._start_play_now_watchdog(track)
+                    self._start_play_now_watchdog(self.current_track)
 
                 # Kick off next-next track generation, cancelling any stale task first
                 self._start_prebuffer()
@@ -790,37 +859,59 @@ class RadioOrchestrator:
             logger.info("[radio] Radio loop exited")
 
     async def _generate_and_buffer_next(self) -> None:
-        """Generate the next track in the background and notify the frontend.
+        """Generate one track in the background and fill the first available pipeline slot.
 
-        Checks _stop_event after generation to avoid broadcasting into a
-        stopped session (e.g. if stop() was called while generating).
+        Self-routing: stores into Slot 1 (next_track), Slot 2 (_queued_next_track), or
+        Slot 3 (_queued2_next_track) — whichever is empty first.
+
+        Self-chaining: after filling a slot, immediately spawns itself again to fill
+        the next slot (if any are still empty and the session is still running).
+        This creates a 3-deep pipeline without any external orchestration:
+          Slot 1 filled → chain → Slot 2 filled → chain → Slot 3 filled → stop.
+        Each transition empties Slot 3, and _start_prebuffer() restarts the chain.
         """
         try:
-            logger.info("[radio] Background: starting next track generation...")
+            logger.info(f"[pipeline] Generation started {self._pipeline_str()}")
             t0 = time.monotonic()
             track = await self._generate_track()
             elapsed = time.monotonic() - t0
 
-            # Guard: the session may have been stopped while we were generating
             if self._stop_event.is_set():
                 logger.info(
-                    f"[radio] Background generation done but session stopped "
+                    f"[pipeline] Generation done but session stopped "
                     f"— discarding '{track.song_title}'"
                 )
                 return
 
+            # Fill the first available pipeline slot
+            if self.next_track is None:
+                self.next_track = track
+                self._next_track_ready_event.set()
+                slot = 1
+            elif self._queued_next_track is None:
+                self._queued_next_track = track
+                slot = 2
+            elif self._queued2_next_track is None:
+                self._queued2_next_track = track
+                slot = 3
+            else:
+                logger.warning(
+                    f"[pipeline] All 3 slots full — discarding '{track.song_title}'"
+                )
+                return
+
             logger.info(
-                f"[radio] Background: next track ready: '{track.song_title}' "
-                f"(took {elapsed:.1f}s)"
+                f"[pipeline] Slot {slot} filled: '{track.song_title}' ({elapsed:.1f}s) "
+                f"→ {self._pipeline_str()}"
             )
 
-            self.next_track = track
-            self._next_track_ready_event.set()
+            # Chain: immediately start filling the next slot while current track plays
+            if slot < 3 and not self._stop_event.is_set():
+                logger.info(f"[pipeline] Chaining → starting Slot {slot + 1} generation")
+                self._prebuffer_task = asyncio.create_task(
+                    self._generate_and_buffer_next(), name="radio-prebuffer"
+                )
 
-            # Next track is held silently — clients pull it via HTTP when ready.
-            # No push broadcast: each client fetches on its own schedule.
-
-            # Promote any deferred controller now that generation is complete
             if self._pending_promotion:
                 logger.info("[radio] Promoting deferred viewer to controller (generation complete)")
                 await self._promote_next_controller()
@@ -830,6 +921,8 @@ class RadioOrchestrator:
         except Exception as e:
             logger.error(f"[radio] Background generation error: {e}", exc_info=True)
             await self._broadcast_error(f"Failed to generate next track: {e}")
+            # RC3 fix: unblock any radio loop stuck waiting in BUFFERING state
+            self._next_track_ready_event.set()
 
     # ------------------------------------------------------------------ #
     # Track generation pipeline
