@@ -53,30 +53,22 @@ npm run build
 cd "$PROJECT_DIR"
 echo "  Frontend build complete — output: frontend/dist/"
 
-# ── 1. Ollama ──────────────────────────────────────────────────────────────
+# ── 1. aimodel proxy ──────────────────────────────────────────────────────
+# Ollama is managed by aimodel — this app connects through the proxy on :11430.
+PROXY_URL="http://127.0.0.1:11430"
 OLLAMA_PID=""
-if pgrep -x "ollama" > /dev/null 2>&1; then
-  echo "[1/5] Ollama already running."
+if curl -sf "$PROXY_URL/health" &>/dev/null; then
+  echo "[1/5] aimodel proxy ready on $PROXY_URL"
 else
-  echo "[1/5] Starting Ollama..."
-  OLLAMA_FLASH_ATTENTION=1 ollama serve > /tmp/generative-radio-ollama.log 2>&1 &
-  OLLAMA_PID=$!
-  echo "  Ollama PID: $OLLAMA_PID  (log: /tmp/generative-radio-ollama.log)"
+  echo ""
+  echo "  ERROR: aimodel proxy not running."
+  echo "  Start it first:  cd $(dirname "$SCRIPT_DIR")/aimodel && ./start.sh"
+  echo ""
+  exit 1
 fi
 
-echo "  Waiting for Ollama to become ready..."
-WAIT=0
-until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
-  sleep 1
-  WAIT=$((WAIT + 1))
-  if [ $WAIT -ge 30 ]; then
-    echo "  ERROR: Ollama did not start within 30s. Check /tmp/generative-radio-ollama.log"
-    exit 1
-  fi
-done
-echo "  Ollama ready. Ensuring LLM models are present..."
-ollama pull qwen3.5:4b   2>&1 | tail -1
-ollama pull qwen3.5:0.8b 2>&1 | tail -1
+# Point the ollama Python SDK at the proxy port.
+export OLLAMA_HOST="$PROXY_URL"
 
 # ── 2. ACE-Step API ────────────────────────────────────────────────────────
 if [ ! -d "$ACESTEP_DIR" ]; then
@@ -230,7 +222,7 @@ echo "║  Remote:     $TUNNEL_URL"
 echo "║                                              ║"
 echo "║  Backend:    http://localhost:5555           ║"
 echo "║  ACE-Step:   http://localhost:8001           ║"
-echo "║  Ollama:     http://localhost:11434          ║"
+echo "║  Ollama:     http://127.0.0.1:11430 (proxy)  ║"
 echo "╠══════════════════════════════════════════════╣"
 echo "║  Logs:                                       ║"
 echo "║    Backend:  /tmp/generative-radio-backend.log    ║"
@@ -246,7 +238,7 @@ cleanup() {
   echo "Shutting down backend, frontend, and tunnel..."
   kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null
   [[ -n "$CLOUDFLARED_PID" ]] && kill "$CLOUDFLARED_PID" 2>/dev/null
-  [[ -n "$OLLAMA_PID" ]] && kill "$OLLAMA_PID" 2>/dev/null
+  # Ollama is managed by aimodel — use aimodel/stop.sh to shut it down.
   echo ""
   echo "  ⚠  ACE-Step (PID $ACESTEP_PID) is still running."
   echo "     To stop it: kill $ACESTEP_PID"
