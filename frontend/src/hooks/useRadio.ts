@@ -70,7 +70,10 @@ export function useRadio(): UseRadioReturn {
   const [listenerCount, setListenerCount] = useState(0);
   const [viewers, setViewers] = useState<ViewerInfo[]>([]);
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
-  const [localPaused, setLocalPaused] = useState(true);
+  // Starts false (intent: play) so the app attempts auto-play as soon as the
+  // first track arrives. If the browser blocks autoplay (no user gesture yet),
+  // playTrack's NotAllowedError handler flips this to true and shows PLAY.
+  const [localPaused, setLocalPaused] = useState(false);
   const activityIdRef = useRef(0);
 
   // DJ mode state
@@ -91,7 +94,7 @@ export function useRadio(): UseRadioReturn {
   const preloadBlobUrlRef = useRef<string | null>(null);  // In-memory blob URL for the next track
   const activeBlobUrlRef = useRef<string | null>(null);   // Blob URL currently being played (revoke on next transition)
   const currentTrackRef = useRef<Track | null>(null);     // Ref mirror of currentTrack (stale-closure safe for WS callbacks)
-  const localPausedRef = useRef<boolean>(true);           // Ref mirror of localPaused (stale-closure safe)
+  const localPausedRef = useRef<boolean>(false);          // Ref mirror of localPaused (stale-closure safe)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelay = useRef(RECONNECT_BASE_MS);
   const isActiveRef = useRef(false);                      // True while radio should maintain WS
@@ -564,7 +567,8 @@ export function useRadio(): UseRadioReturn {
     }
 
     // Controller started from a button click — clear the paused flag so tracks auto-play.
-    // Viewers never call start(), so their localPausedRef stays true until they tap Play.
+    // (Viewers start with localPaused=false too and auto-play on open; if the browser
+    // blocks it, playTrack's NotAllowedError handler shows the PLAY button.)
     setLocalPaused(false);
     localPausedRef.current = false;
 

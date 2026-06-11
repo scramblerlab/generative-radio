@@ -72,6 +72,7 @@ class TrackInfo(BaseModel):
     dj_name: str = ""            # DJ who generated this track (empty if no DJ session)
     dj_keywords: list[str] = []  # Keywords chosen by the DJ for this track
     dj_language: str = ""        # Language chosen by the DJ for this track
+    replay: bool = False         # True when served from the persistent library while generating
 
 
 class RadioStartRequest(BaseModel):

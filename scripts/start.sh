@@ -198,20 +198,51 @@ echo ""
 echo "Press Ctrl+C to stop all services."
 echo ""
 
-# Shutdown hook — stop the app (backend + frontend + tunnel + optionally Ollama),
-# but intentionally leave ACE-Step running. ACE-Step takes minutes to warm
-# up and may be mid-generation; killing it here costs you the next restart.
-# To stop ACE-Step manually: kill <PID shown above>
+# TERM a process and all of its descendants (npm→vite, uv→python, etc.).
+kill_tree() {
+  local pid=$1 child
+  [[ -z "$pid" || "$pid" == "unknown" ]] && return
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    kill_tree "$child"
+  done
+  kill "$pid" 2>/dev/null || true
+}
+
+# Kill whatever is listening on a TCP port (catches re-parented stragglers).
+kill_port() {
+  local pids
+  pids=$(lsof -ti tcp:"$1" 2>/dev/null || true)
+  [[ -n "$pids" ]] && kill $pids 2>/dev/null || true
+}
+
+# Shutdown hook — stops backend, frontend, tunnel, and (by default) ACE-Step.
+# Set KEEP_ACESTEP=1 to leave ACE-Step running across restarts and skip its
+# multi-minute model reload next time.
 cleanup() {
+  trap - INT TERM  # don't re-enter on a second Ctrl+C
   echo ""
   echo "Shutting down backend, frontend, and tunnel..."
-  kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null
-  [[ -n "$CLOUDFLARED_PID" ]] && kill "$CLOUDFLARED_PID" 2>/dev/null
+  kill_tree "$BACKEND_PID";  kill_port 5555
+  kill_tree "$FRONTEND_PID"; kill_port 5173
+  [[ -n "$CLOUDFLARED_PID" ]] && kill_tree "$CLOUDFLARED_PID"
   # Ollama is managed by aimodel — use aimodel/stop.sh to shut it down.
-  echo ""
-  echo "  ⚠  ACE-Step (PID $ACESTEP_PID) is still running."
-  echo "     To stop it: kill $ACESTEP_PID"
-  echo ""
+
+  if [[ "${KEEP_ACESTEP:-0}" == "1" ]]; then
+    echo "  KEEP_ACESTEP=1 — leaving ACE-Step (PID $ACESTEP_PID) running."
+  else
+    echo "  Stopping ACE-Step..."
+    kill_tree "$ACESTEP_PID"; kill_port 8001
+  fi
+
+  # Grace period, then force-kill anything still holding our ports.
+  sleep 2
+  PORTS="5555 5173"
+  [[ "${KEEP_ACESTEP:-0}" == "1" ]] || PORTS="$PORTS 8001"
+  for port in $PORTS; do
+    pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
+    [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null || true
+  done
+
   echo "Done."
   exit 0
 }

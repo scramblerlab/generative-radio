@@ -243,6 +243,9 @@ class ACEStepClient:
         parsed = urlparse(file_url)
         path_param = parse_qs(parsed.query).get("path", [""])[0]
         logger.info(f"[acestep] '{prompt.song_title}' — audio file_url: {file_url!r} → path: {path_param!r}")
+        # Absolute path of the MP3 on disk — the TrackLibrary adopts (moves) this
+        # file after download so api_audio never accumulates duplicates.
+        result["file_path"] = path_param
 
         t_dl = time.monotonic()
         audio_bytes = await self.get_audio_bytes(path_param, song_title=prompt.song_title)

@@ -22,6 +22,7 @@ export interface Track {
   djName: string;     // DJ who generated this track (empty if no DJ session)
   djKeywords: string[]; // Keywords chosen by the DJ for this track
   djLanguage: string;   // Language chosen by the DJ for this track
+  replay?: boolean;     // True when served from the library while a fresh track generates
 }
 
 export interface Genre {

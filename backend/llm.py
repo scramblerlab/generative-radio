@@ -396,7 +396,10 @@ RULES:
                     {"role": "user", "content": user_message},
                 ],
                 think=False,  # Disable Qwen3 chain-of-thought — adds latency without improving output
-                keep_alive=0,  # Unload model immediately — frees ~2.5GB before ACE-Step VAE decode
+                # No keep_alive here: Ollama runs as a shared server managed by ../aimodel
+                # with OLLAMA_KEEP_ALIVE=-1. A request-level keep_alive=0 would override
+                # that and unload the model other apps are using. 64GB has ample headroom
+                # (see aimodel/README.md RAM budget).
             )
         except Exception as e:
             logger.error(f"[llm] Ollama chat() failed: {e}", exc_info=True)
