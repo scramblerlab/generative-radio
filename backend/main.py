@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ from llm import OllamaClient
 from acestep_client import ACEStepClient
 from radio import RadioOrchestrator, _is_local_ip, _normalize_ip
 from models import ReactRequest
+from warmup import run_warmup
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +48,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Generative Radio backend starting")
     logger.info(f"  LLM model : {OLLAMA_MODEL}")
     logger.info(f"  ACE-Step  : {acestep.base_url}")
+    logger.info(f"  Library   : {radio.library.dir if radio.library.enabled else 'disabled'} ({len(radio.library)} tracks)")
     logger.info("=" * 60)
+
+    radio.library.start_janitor()
+    warmup_task: asyncio.Task | None = None
+    if os.getenv("WARMUP_ON_START", "1") == "1":
+        warmup_task = asyncio.create_task(run_warmup(acestep), name="acestep-warmup")
 
     yield  # application runs here
 
     logger.info("[main] Shutting down — stopping radio and closing clients")
+    if warmup_task and not warmup_task.done():
+        warmup_task.cancel()
+    radio.library.stop_janitor()
     await radio.stop()
     await acestep.close()
     logger.info("[main] Shutdown complete")
