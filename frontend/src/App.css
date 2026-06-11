@@ -886,6 +886,20 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   text-transform: uppercase;
 }
 
+/* Row holding the controller/genre badge plus optional REPLAY badge */
+.player__badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-self: flex-start;
+  margin-bottom: 16px;
+}
+
+.player__badge-row .player__controller-badge {
+  align-self: auto;
+  margin-bottom: 0;
+}
+
 /* Save Track button — inherits same look as Change genres */
 .player__save-track {
   font-size: 13px;

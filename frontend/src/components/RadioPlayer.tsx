@@ -134,14 +134,23 @@ const isPlaying = status === 'playing';
       )}
 
 <div className="player__card">
-        {/* Single badge: shows controller prefix for host, genre info for all */}
-        {track && (track.genre || !readonly) && (
-          <div className="player__controller-badge">
-            {!readonly && `CONTROLLER :: `}
-            {track.isRandom
-              ? track.genre ? `RANDOM · ${track.genre.toUpperCase()}` : 'RANDOM'
-              : track.genre.toUpperCase()}
-            {track.djName && ` (DJ: ${track.djName})`}
+        {/* Badges: controller prefix / genre info for all, plus REPLAY for library tracks */}
+        {track && (track.genre || !readonly || track.replay) && (
+          <div className="player__badge-row">
+            {(track.genre || !readonly) && (
+              <div className="player__controller-badge">
+                {!readonly && `CONTROLLER :: `}
+                {track.isRandom
+                  ? track.genre ? `RANDOM · ${track.genre.toUpperCase()}` : 'RANDOM'
+                  : track.genre.toUpperCase()}
+                {track.djName && ` (DJ: ${track.djName})`}
+              </div>
+            )}
+            {track.replay && (
+              <div className="player__controller-badge" title="Previously generated track — a fresh one is on its way">
+                REPLAY
+              </div>
+            )}
           </div>
         )}
 
