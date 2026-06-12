@@ -52,14 +52,16 @@ No manual step needed. The Xcode project has a **"Bundle React Native code and i
 
 ## Step 4 — Increment the build number
 
-Each upload to App Store Connect requires a unique build number. The current build number lives in `CURRENT_PROJECT_VERSION` in the Xcode project settings (currently `1`).
+Each upload to App Store Connect requires a unique build number — even rejected or unreleased builds consume their number. The build number lives in `CURRENT_PROJECT_VERSION` in the Xcode project settings.
 
 To bump it:
 
 - In Xcode: select the **GenerativeRadio** target → **General** tab → **Build** field.
 - Or edit directly in `mobile/ios/GenerativeRadio.xcodeproj/project.pbxproj` — search for `CURRENT_PROJECT_VERSION` and increment the value.
 
-The marketing version (`MARKETING_VERSION` / `CFBundleShortVersionString`) only needs to change when you want to show a new version number to users.
+The marketing version (`MARKETING_VERSION` / `CFBundleShortVersionString`) only needs to change when you want to show a new version number to users. When you do change it, also update `version` in `mobile/app.json` to match — that is what `expo prebuild` stamps into the native project.
+
+> **Gotcha — Xcode edits silently ignored:** `expo prebuild` generates `mobile/ios/GenerativeRadio/Info.plist` with *hardcoded* `CFBundleShortVersionString` and `CFBundleVersion` values, and literal Info.plist values override the Xcode build settings. If the General-tab fields don't show up in your archive, check that Info.plist contains `$(MARKETING_VERSION)` and `$(CURRENT_PROJECT_VERSION)` for those two keys (fixed on 2026-06-12). After re-running `expo prebuild`, the hardcoded values come back and you must re-apply the variable references — or just edit the Info.plist literals directly.
 
 ---
 
