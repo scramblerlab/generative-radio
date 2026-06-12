@@ -69,6 +69,14 @@ const POLL_INTERVAL_MS = 10_000;
 // After a debounced duplicate track_ended, wait slightly longer than the 5s
 // debounce window before retrying fetchAndPlay so the server has advanced.
 const DEBOUNCE_RETRY_MS = 6_000;
+// iOS background-start: how long the silence bridge + status polling may keep
+// the app alive in background while waiting for the FIRST track. App Review
+// guideline 2.5.4 disallows indefinite silent background audio — keep this
+// bounded; the bridge is a short ramp into imminent real playback.
+const BG_FIRST_TRACK_WAIT_CAP_MS = 10 * 60_000;
+// A fetchAndPlay run older than this is considered a zombie (iOS suspended the
+// JS thread mid-await and never resumed it); play_now may break its mutex.
+const FETCH_STUCK_MS = 120_000;
 
 export function useRadio(): UseRadioReturn {
   // ------------------------------------------------------------------ //
@@ -111,6 +119,11 @@ export function useRadio(): UseRadioReturn {
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isFetchingRef = useRef(false);
+  // Monotonic epoch for fetchAndPlay runs. Bumping it invalidates suspended
+  // continuations of older runs (iOS can freeze an async fn mid-await for
+  // minutes and resume it after wake) so they can't clobber newer state.
+  const fetchEpochRef = useRef(0);
+  const fetchStartedAtRef = useRef(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -126,6 +139,8 @@ export function useRadio(): UseRadioReturn {
   const playerSubRef = useRef<{ remove: () => void } | null>(null);
   // Backup timeout for track-end detection when the listener is suspended.
   const bgTrackEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Cap timer for the iOS background first-track wait (silence bridge + polling).
+  const bgWaitCapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // expo-audio player refs
   const playerRef = useRef<AudioPlayer | null>(null);        // active music player
@@ -270,6 +285,11 @@ export function useRadio(): UseRadioReturn {
   }, []);
 
   const stopSilenceBridge = useCallback(() => {
+    // Every bridge teardown also cancels the background first-track wait cap.
+    if (bgWaitCapTimerRef.current) {
+      clearTimeout(bgWaitCapTimerRef.current);
+      bgWaitCapTimerRef.current = null;
+    }
     if (!isBridgingRef.current) return;
     isBridgingRef.current = false;
     try {
@@ -325,6 +345,17 @@ export function useRadio(): UseRadioReturn {
     if (!wasBackground || !playerRef.current || playerSubRef.current) return;
     let wasPlayingResume = playerRef.current.playing;
     playerSubRef.current = playerRef.current.addListener('playbackStatusUpdate', (status) => {
+      if (status.playbackState === 'failed') {
+        // Mirrors the failure recovery in fetchAndPlay's listener (see there).
+        if (!localPausedRef.current && !isFetchingRef.current) {
+          console.error('[Audio] playbackState=failed — re-downloading current track');
+          currentTrackIdRef.current = null;
+          setRadioState('error');
+          setErrorMessage('Playback failed — recovering...');
+          fetchAndPlayRef.current?.();
+        }
+        return;
+      }
       if (status.didJustFinish) {
         console.log('[Audio] didJustFinish — bg:', isBackgroundRef.current, 'paused:', localPausedRef.current, 'fetching:', isFetchingRef.current);
         if (!localPausedRef.current) handleTrackEndedRef.current?.();
@@ -383,6 +414,9 @@ export function useRadio(): UseRadioReturn {
   const handleTrackEndedAndroid = useCallback(() => {
     if (localPausedRef.current || isFetchingRef.current) return;
     isFetchingRef.current = true;
+    // Stamp the mutex acquisition so the play_now stuck-mutex escape judges
+    // this native fetch by its real age, not a previous run's timestamp.
+    fetchStartedAtRef.current = Date.now();
     startSilenceBridge(); // ensure bridge is running (may already be from background entry)
     sendTrackEndedNative(`${BACKEND_URL}/api/radio/track-ended`); // fire-and-forget
     setRadioState('fetching');
@@ -449,6 +483,8 @@ export function useRadio(): UseRadioReturn {
       return;
     }
     isFetchingRef.current = true;
+    const epoch = ++fetchEpochRef.current;
+    fetchStartedAtRef.current = Date.now();
     setRadioState('fetching');
     setStatusMessage('Loading track...');
     setErrorMessage(null);
@@ -462,8 +498,10 @@ export function useRadio(): UseRadioReturn {
       } else {
         console.log('[F&P] GET /api/radio/status…');
         const res = await fetch(`${BACKEND_URL}/api/radio/status`);
+        if (epoch !== fetchEpochRef.current) { console.log('[F&P] stale epoch — aborting'); return; }
         if (!res.ok) throw new Error(`Status ${res.status}`);
         data = await res.json() as { currentTrack: Track | null; state: string };
+        if (epoch !== fetchEpochRef.current) { console.log('[F&P] stale epoch — aborting'); return; }
       }
       console.log('[F&P] status response — serverState:', data.state, 'trackId:', data.currentTrack?.id ?? 'null', 'currentLocal:', currentTrackIdRef.current);
 
@@ -471,6 +509,16 @@ export function useRadio(): UseRadioReturn {
         // No track yet — server still generating; poll
         console.log('[F&P] no track on server — starting poll');
         isFetchingRef.current = false;
+        // iOS pre-first-track: start the silence bridge now, while the app can
+        // still activate an audio session (iOS cannot do that from background).
+        // It keeps the app unsuspended if the user backgrounds before the
+        // first track arrives. Trade-off: with interruptionMode 'doNotMix'
+        // this stops other apps' audio at launch — accepted for an
+        // auto-playing radio app. Gated on a null track ref so mid-session
+        // behavior is unchanged; iOS-only because Android stops polling in
+        // background anyway (its native fallbacks are mid-session only), so a
+        // bridge would loop silence there for no benefit.
+        if (Platform.OS === 'ios' && currentTrackIdRef.current === null) startSilenceBridge();
         startPolling();
         return;
       }
@@ -499,11 +547,13 @@ export function useRadio(): UseRadioReturn {
       const hadPreviousTrack = currentTrackIdRef.current !== null;
       if (hadPreviousTrack) {
         await sendTrackEnded();
+        if (epoch !== fetchEpochRef.current) { console.log('[F&P] stale epoch — aborting'); return; }
       }
 
       // Download audio to fixed local file
       console.log('[F&P] downloading', track.songTitle, '(bg:', isBackgroundRef.current, ')');
       const localUri = await downloadAudio(track);
+      if (epoch !== fetchEpochRef.current) { console.log('[F&P] stale epoch — aborting'); return; }
       console.log('[F&P] download complete →', localUri);
 
       // Stop silence bridge and set up new AudioPlayer
@@ -534,6 +584,20 @@ export function useRadio(): UseRadioReturn {
       playerSubRef.current?.remove();
       let wasPlaying = true;
       playerSubRef.current = player.addListener('playbackStatusUpdate', (status) => {
+        if (status.playbackState === 'failed') {
+          // expo-audio has no error event — a failed AVPlayerItem (e.g. corrupt
+          // local file) surfaces only here. Reset the track id so fetchAndPlay
+          // re-downloads instead of looping the same-track 6s retry, and so
+          // sendTrackEnded is suppressed (the server must not advance).
+          if (!localPausedRef.current && !isFetchingRef.current) {
+            console.error('[Audio] playbackState=failed — re-downloading current track');
+            currentTrackIdRef.current = null;
+            setRadioState('error');
+            setErrorMessage('Playback failed — recovering...');
+            fetchAndPlayRef.current?.();
+          }
+          return;
+        }
         if (status.didJustFinish) {
           console.log('[Audio] didJustFinish — bg:', isBackgroundRef.current, 'paused:', localPausedRef.current, 'fetching:', isFetchingRef.current);
           if (!localPausedRef.current) {
@@ -627,6 +691,8 @@ export function useRadio(): UseRadioReturn {
       }
 
     } catch (err) {
+      // A stale (superseded) run's failure must not flip state or schedule retries.
+      if (epoch !== fetchEpochRef.current) { console.log('[F&P] stale epoch — error ignored'); return; }
       console.error('[F&P] FAILED (bg:', isBackgroundRef.current, '):', err);
       setRadioState('error');
       setErrorMessage('Failed to load track — retrying...');
@@ -637,7 +703,7 @@ export function useRadio(): UseRadioReturn {
 
     isFetchingRef.current = false;
     console.log('[F&P] done — playing (bg:', isBackgroundRef.current, ')');
-  }, [sendTrackEnded, startPolling, stopPolling, stopSilenceBridge, fetchReactions]);
+  }, [sendTrackEnded, startPolling, stopPolling, startSilenceBridge, stopSilenceBridge, fetchReactions]);
 
   // Keep the refs in sync so polling and other callbacks always call the latest version
   useEffect(() => {
@@ -676,47 +742,37 @@ export function useRadio(): UseRadioReturn {
   // ------------------------------------------------------------------ //
 
   const handleWake = useCallback(async () => {
-    const state = radioStateRef.current;
-    console.log('[AppState] Wake — radioState:', state, 'localPaused:', localPausedRef.current);
+    console.log('[AppState] Wake — radioState:', radioStateRef.current, 'localPaused:', localPausedRef.current);
 
-    if (localPausedRef.current) return;
+    if (localPausedRef.current) return;            // user paused / tuned out
+    if (radioStateRef.current === 'idle') return;
+    if (playerRef.current?.playing) return;        // already audible
 
-    switch (state) {
-      case 'playing': {
-        const active = (playerRef.current?.playing ?? false) || isBridgingRef.current;
-        if (!active && playerReadyRef.current) {
-          // Try a simple resume first (covers normal backgrounding)
-          try { playerRef.current?.play(); } catch {}
-          await new Promise<void>((r) => setTimeout(r, 1_000));
-          const stillActive = (playerRef.current?.playing ?? false) || isBridgingRef.current;
-          if (!stillActive) {
-            console.log('[Wake] Player did not resume — re-fetching');
-            await fetchAndPlay();
-          }
-        }
-        break;
-      }
-      case 'fetching':
-        // isFetchingRef may be stuck true from a fetch killed by iOS sleep
-        if (isFetchingRef.current) {
-          console.log('[Wake] Fetch was in-flight during sleep — resetting mutex + retrying');
-          isFetchingRef.current = false;
-          await fetchAndPlay();
-        }
-        break;
-      case 'polling':
-        // Poll interval was suspended by iOS; restart it
-        stopPolling();
-        startPolling();
-        break;
-      case 'error':
-        await fetchAndPlay();
-        break;
-      case 'idle':
-      case 'paused':
-        break;
+    if (radioStateRef.current === 'playing' && playerRef.current && playerReadyRef.current) {
+      // Try a simple resume first (covers normal backgrounding)
+      try { playerRef.current.play(); } catch {}
+      await new Promise<void>((r) => setTimeout(r, 1_000));
+      if (playerRef.current?.playing) return;      // cheap resume worked
+      console.log('[Wake] Player did not resume — re-syncing');
     }
-  }, [fetchAndPlay, startPolling, stopPolling]);
+
+    if (isFetchingRef.current) {
+      // A fetch is (or claims to be) in flight — give it a short grace window,
+      // then assume it's a zombie suspended by iOS and invalidate its epoch.
+      await new Promise<void>((r) => setTimeout(r, 4_000));
+      if (playerRef.current?.playing) return;
+      if (isFetchingRef.current) {
+        console.log('[Wake] Fetch still in-flight after grace — invalidating epoch + retrying');
+        fetchEpochRef.current++;
+        isFetchingRef.current = false;
+      }
+    }
+
+    // Immediate guarded re-sync — kills the 10s first-poll delay. Idempotency
+    // lives inside fetchAndPlay (same-track no-op / retry, no-track → poll).
+    stopPolling();
+    await fetchAndPlay();
+  }, [fetchAndPlay, stopPolling]);
 
   // ------------------------------------------------------------------ //
   // WebSocket
@@ -738,6 +794,19 @@ export function useRadio(): UseRadioReturn {
           ws.send(JSON.stringify({ event: 'ping' }));
         }
       }, 20_000);
+      // Reconnect re-sync: if we should be playing but aren't (e.g. missed a
+      // play_now while the socket was down), do one guarded fetch.
+      if (
+        !localPausedRef.current &&
+        !isFetchingRef.current &&
+        !(playerRef.current?.playing ?? false) &&
+        !isBridgingRef.current &&
+        radioStateRef.current !== 'polling' &&
+        radioStateRef.current !== 'idle'
+      ) {
+        console.log('[WS] reconnected while not audible — re-syncing');
+        fetchAndPlayRef.current?.();
+      }
     };
 
     ws.onmessage = (event: MessageEvent) => {
@@ -772,10 +841,17 @@ export function useRadio(): UseRadioReturn {
         // Backend watchdog — server thinks we should be playing.
         const { for_track_id } = msg.data as { for_track_id?: string };
         console.log('[WS] play_now received for', for_track_id, '— current:', currentTrackIdRef.current);
+        // Stuck-mutex escape: a fetch started long ago is a zombie (suspended by
+        // iOS mid-await) — invalidate it so the watchdog can recover playback.
+        if (isFetchingRef.current && Date.now() - fetchStartedAtRef.current > FETCH_STUCK_MS) {
+          console.log('[WS] play_now — fetch mutex stuck, invalidating epoch');
+          fetchEpochRef.current++;
+          isFetchingRef.current = false;
+        }
         if (
           !localPausedRef.current &&
           !isFetchingRef.current &&
-          (!for_track_id || currentTrackIdRef.current === for_track_id)
+          (currentTrackIdRef.current === null || !for_track_id || currentTrackIdRef.current === for_track_id)
         ) {
           fetchAndPlayRef.current?.();
         }
@@ -837,6 +913,12 @@ export function useRadio(): UseRadioReturn {
   useEffect(() => {
     isActiveRef.current = true;
     connectWebSocket();
+    // Mark play-intent before the first fetch (mirrors tuneIn). localPaused
+    // initializes true, and without this handleWake and play_now bail at their
+    // paused guards during the whole pre-first-track window — backgrounding
+    // before the first song would leave the app silent forever.
+    localPausedRef.current = false;
+    setLocalPaused(false);
     // Start fetching on mount — backend auto-starts with RANDOM if idle
     fetchAndPlayRef.current?.();
     return () => {
@@ -887,6 +969,12 @@ export function useRadio(): UseRadioReturn {
           clearTimeout(bgTrackEndTimerRef.current);
           bgTrackEndTimerRef.current = null;
         }
+        // Cancel the background first-track wait cap; the foreground
+        // handleWake/fetch path takes over recovery from here.
+        if (bgWaitCapTimerRef.current) {
+          clearTimeout(bgWaitCapTimerRef.current);
+          bgWaitCapTimerRef.current = null;
+        }
         // Cancel any in-flight native status fetch listener (Android).
         bgStatusCleanupRef.current?.();
         bgStatusCleanupRef.current = null;
@@ -915,7 +1003,31 @@ export function useRadio(): UseRadioReturn {
           clearTimeout(reconnectTimer.current);
           reconnectTimer.current = null;
         }
-        stopPolling();
+        // iOS first-track wait: if the silence bridge is holding an active
+        // audio session and no track has ever played, keep polling alive —
+        // the session keeps the app unsuspended, so JS timers + fetch still
+        // work (same mechanism the mid-session iOS path relies on). Bounded
+        // by a cap timer (App Review 2.5.4 disallows indefinite silent
+        // background audio). Android keeps its native-module fallbacks.
+        if (
+          Platform.OS === 'ios' &&
+          currentTrackIdRef.current === null &&
+          isBridgingRef.current &&
+          !localPausedRef.current
+        ) {
+          console.log('[BG] iOS — waiting for first track: keeping poll + bridge alive');
+          if (bgWaitCapTimerRef.current) clearTimeout(bgWaitCapTimerRef.current);
+          bgWaitCapTimerRef.current = setTimeout(() => {
+            bgWaitCapTimerRef.current = null;
+            if (isBackgroundRef.current && currentTrackIdRef.current === null) {
+              console.log('[BG] first-track wait cap reached — releasing poll + bridge');
+              stopPolling();
+              stopSilenceBridge();
+            }
+          }, BG_FIRST_TRACK_WAIT_CAP_MS);
+        } else {
+          stopPolling();
+        }
         stopProgressTimer();
         // Platform-specific background entry logic.
         if (Platform.OS === 'ios') {
@@ -926,7 +1038,7 @@ export function useRadio(): UseRadioReturn {
       }
     });
     return () => sub.remove();
-  }, [handleWake, stopPolling, connectWebSocket, startProgressTimer, stopProgressTimer, handleBackgroundIOS, handleBackgroundAndroid, handleForegroundIOS]);
+  }, [handleWake, stopPolling, stopSilenceBridge, connectWebSocket, startProgressTimer, stopProgressTimer, handleBackgroundIOS, handleBackgroundAndroid, handleForegroundIOS]);
 
   // ------------------------------------------------------------------ //
   // Public API
