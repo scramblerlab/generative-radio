@@ -382,7 +382,7 @@ loss in the paired-seed blind A/B. 1E target: VAE per 100 codes below ~1.0 s.
 ### Phase D Results — q8 LM quantization (1D), measured 2026-06-12
 
 `acestep-5Hz-lm-1.7B-q8` (8-bit MLX, group_size 64, converted with
-`ACE-Step-1.5/scripts/quantize_5hz_lm_q8.py`), same production conditions as the baseline,
+[scripts/quantize_5hz_lm_q8.py](../scripts/quantize_5hz_lm_q8.py)), same production conditions as the baseline,
 n=16 full-length tracks, T1 discarded:
 
 | Metric (full-length) | bf16 baseline | q8 | Delta |
