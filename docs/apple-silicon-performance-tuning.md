@@ -398,3 +398,31 @@ Idle microbenchmark (raw mlx_lm decode, no contention): 58.3 → 92.0 tok/s (1.5
 greedy first tokens vs bf16. Quality: no degradation noticed in extended casual listening;
 formal paired-seed blind A/B pending. Caveat: the quantized dir is MLX-only — the Gradio UI's
 PMI scoring panel (torch load) cannot read it; the radio API flow is unaffected.
+
+### Phase E Results — VAE chunk sweep (1E), measured 2026-06-12: NO CHANGE
+
+`ACESTEP_MLX_VAE_CHUNK` sweep using a harness that binds ACE-Step's production
+init/decode mixins (fp16 + mx.compile, identical tiling code) on a quiet GPU,
+full-length latent [1, 64, 3000] (~240s track), 3 steady-state runs per value:
+
+| chunk | steady decode | peak decode memory |
+|---|---|---|
+| 1024 (auto-tuned current) | 4.46 s | 6.3 GB |
+| 2048 | 4.27 s | 11.8 GB |
+| 3072 (single-shot) | 4.18 s | 17.7 GB |
+| 4096 | 4.22 s | 17.7 GB |
+
+**Decision: keep the auto-tuned default (1024); do not set the env var.**
+The plan's premise ("auto-tuner is conservative for low-memory machines,
+expect ~2-3 s/track") did not hold: on 64 GB the auto-tuner already selects
+1024, and the best case (3072) saves only ~0.28 s/track while nearly tripling
+peak decode memory — extra pressure during exactly the window where GPU
+contention dominates. The real source of the production VAE cost is that
+contention, not chunking: isolated decode of a production-identical shape
+takes ~3.3-4.5 s where production logs 8-14 s alongside concurrent DiT/LM/
+Ollama work.
+
+Sweep harness: bind `MlxVaeInitMixin` + `MlxVaeDecodeNativeMixin` to a shim
+object, load `checkpoints/vae` via diffusers `AutoencoderOobleck`, decode a
+fixed random latent at each `mlx_vae_chunk_size`, discarding the first run
+(mx.compile warmup). Re-runnable in ~2 min if hardware or ACE-Step changes.
