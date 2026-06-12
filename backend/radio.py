@@ -1117,8 +1117,9 @@ class RadioOrchestrator:
             song_prompt, genre_label, genres_for_track = await self._prepare_song_prompt(short_id)
 
         # Overlap: prepare the NEXT track's prompt while ACE-Step synthesizes this
-        # one (the LLM runs on the shared Ollama server; ACE-Step polling is pure
-        # I/O wait — see docs/apple-silicon-performance-tuning.md).
+        # one. ACE-Step's MLX LM phases saturate the GPU and roughly halve Ollama's
+        # generation speed (~25 vs ~55 tok/s), but the prefetch still completes well
+        # within the synthesis window, so it never lands on the critical path.
         if not self._stop_event.is_set():
             self._prompt_task = asyncio.create_task(
                 self._prefetch_next_prompt(), name="prompt-prefetch"

@@ -340,8 +340,61 @@ Comparing Phase B steady-state (T2–T4 avg) across machines. Different track du
 
 | Option | Reason excluded |
 |---|---|
-| `OLLAMA_KEEP_ALIVE=-1` (keep Ollama loaded between calls) | `keep_alive=0` in `llm.py` is intentional — frees ~2.5GB for MLX's contiguous Metal buffer. Changing this risks memory fragmentation on 180s tracks on Mac Mini. |
+| ~~`OLLAMA_KEEP_ALIVE=-1`~~ (superseded 2026-06) | Originally excluded to free ~2.5GB before VAE decode. Now DONE: Ollama runs as a shared server under `../aimodel` with `OLLAMA_KEEP_ALIVE=-1` and the request-level `keep_alive=0` was removed from `llm.py` (64GB has ample headroom — see aimodel/README.md RAM budget). |
 | `ACESTEP_COMPILE_MODEL` for PyTorch path | Not applicable — project uses MLX backend (`ACESTEP_LM_BACKEND=mlx`). |
 | `QoS / taskpolicy` | Foreground processes already get Performance cores on macOS. Marginal gain (~1–2%) not worth added complexity. |
 | Larger LM model (1.7B or 4B) | Opposite direction — slower, not faster. Default 0.6B is correct. |
 | Changing `inference_steps`, `thinking`, CoT flags | Quality parameters, explicitly out of scope. |
+
+---
+
+## Phase D Baseline — 2026-06-12 (pre-LM-quantization, production steady-state)
+
+Frozen baseline for the next-improvements-plan **1D** (q8 LM quantization) and **1E**
+(`ACESTEP_MLX_VAE_CHUNK`) experiments. Measured from `/private/tmp/generative-radio-acestep.log`
+with [scripts/acestep_baseline.py](../scripts/acestep_baseline.py) — 34 tracks over ~75 min of
+continuous radio, T1 discarded, full-length cohort = codes ≥ 900 (n=23).
+
+**Conditions (must match for A/B):** ACE-Step `dce6214`, `acestep-v15-xl-turbo` DiT +
+`acestep-5Hz-lm-1.7B` (bf16) on MLX, `ACESTEP_COMPILE_MODEL=1`, steps=8, thinking+CoT on;
+Ollama 0.30.7 via aimodel proxy (flash attention, q8_0 KV, parallel 4, ctx 8192, keep-alive -1);
+radio prompt-prefetch overlapping synthesis (production-normal GPU contention); track durations
+180–260s (900–1300 codes).
+
+| Metric (full-length, n=23) | median | p25 | p75 |
+|---|---|---|---|
+| Phase 1 CoT metadata | 8.2 s | 6.8 | 9.3 |
+| Phase 2 audio codes | 41.7 s | 38.6 | 44.3 |
+| **Phase 2 decode rate** | **27.4 tok/s** | 26.6 | 28.1 |
+| DiT diffusion | 57.5 s | 48.5 | 70.1 |
+| DiT per 100 codes | 5.4 s | 4.3 | 5.9 |
+| VAE decode | 14.1 s | 13.1 | 14.5 |
+| VAE per 100 codes | 1.2 s | 1.2 | 1.3 |
+| Total per track | 131.0 s | 117.8 | 145.9 |
+
+Notes vs the Phase C tables: durations are longer now (median ~1175 codes ≈ 235s audio vs 900),
+and all numbers include bidirectional GPU contention with the Ollama prompt prefetch (Phase 2
+runs ~27 tok/s here vs ~31 measured in isolation). Compare 1D/1E results **under the same
+production conditions**, primarily via the duration-independent rates: Phase 2 tok/s and the
+per-100-codes columns. 1D success target: Phase 2 ≥ ~40 tok/s (≈1.6×) with no audible quality
+loss in the paired-seed blind A/B. 1E target: VAE per 100 codes below ~1.0 s.
+
+### Phase D Results — q8 LM quantization (1D), measured 2026-06-12
+
+`acestep-5Hz-lm-1.7B-q8` (8-bit MLX, group_size 64, converted with
+`ACE-Step-1.5/scripts/quantize_5hz_lm_q8.py`), same production conditions as the baseline,
+n=16 full-length tracks, T1 discarded:
+
+| Metric (full-length) | bf16 baseline | q8 | Delta |
+|---|---|---|---|
+| Phase 1 CoT metadata | 8.2 s | 5.1 s | **-38%** |
+| Phase 2 audio codes | 41.7 s | 27.4 s | **-34%** |
+| **Phase 2 decode rate** | 27.4 tok/s | **43.8 tok/s** | **1.60×** ✓ (target ≥ ~40) |
+| DiT per 100 codes | 5.4 s | 4.9 s | -9% (less LM/Ollama contention spillover) |
+| VAE per 100 codes | 1.2 s | 1.2 s | unchanged (1E still open) |
+| **Total per track** | **131.0 s** | **106.7 s** | **-24.3 s (-19%)** |
+
+Idle microbenchmark (raw mlx_lm decode, no contention): 58.3 → 92.0 tok/s (1.58×), identical
+greedy first tokens vs bf16. Quality: no degradation noticed in extended casual listening;
+formal paired-seed blind A/B pending. Caveat: the quantized dir is MLX-only — the Gradio UI's
+PMI scoring panel (torch load) cannot read it; the radio API flow is unaffected.

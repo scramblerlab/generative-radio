@@ -86,7 +86,7 @@ else
   echo "[2/5] Starting ACE-Step 1.5 API server..."
   cd "$ACESTEP_DIR"
   ACESTEP_LM_BACKEND=mlx \
-  ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-1.7B \
+  ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-1.7B-q8 \
   ACESTEP_CONFIG_PATH=acestep-v15-xl-turbo \
   ACESTEP_COMPILE_MODEL=1 \
   ACESTEP_MLX_VAE_FP16=1 \
