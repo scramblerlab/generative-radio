@@ -2,8 +2,8 @@
   "expo": {
     "name": "Generative Radio",
     "slug": "generative-radio",
-    "version": "1.1.1",
-    "orientation": "portrait",
+    "version": "1.2.0",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "splash": {
@@ -12,7 +12,8 @@
       "backgroundColor": "#0a0a0f"
     },
     "ios": {
-      "supportsTablet": false,
+      "supportsTablet": true,
+      "buildNumber": "1",
       "bundleIdentifier": "com.generativeradio.app",
       "infoPlist": {
         "UIBackgroundModes": [
@@ -20,10 +21,13 @@
           "fetch"
         ],
         "NSLocalNetworkUsageDescription": "Generative Radio connects to a local server on your network to stream music.",
-        "NSBonjourServices": ["_http._tcp"],
+        "NSBonjourServices": [
+          "_http._tcp"
+        ],
         "NSBluetoothAlwaysUsageDescription": "Allow access to Bluetooth to connect to wireless audio speakers and headphones.",
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "appleTeamId": "GXWN8P2ZSF"
     },
     "android": {
       "adaptiveIcon": {
@@ -38,7 +42,9 @@
         "android.permission.INTERNET",
         "android.permission.WAKE_LOCK",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "web": {
@@ -46,10 +52,13 @@
     },
     "plugins": [
       "./plugins/withBackgroundDownloader",
-      ["expo-audio", { 
-        "enableBackgroundPlayback": true,
-        "enableRemoteControl": true  
-      }]
+      [
+        "expo-audio",
+        {
+          "enableBackgroundPlayback": true,
+          "enableRemoteControl": true
+        }
+      ]
     ]
   }
 }

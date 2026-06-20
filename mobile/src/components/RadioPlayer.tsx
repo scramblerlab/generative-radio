@@ -1,149 +1,67 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
-  StyleSheet, Animated, Easing, AppState, AppStateStatus,
+  StyleSheet, AppState, AppStateStatus,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Track, RadioStatus, ActivityEntry, ReactionState } from '@radio/shared';
-import { colors, fonts, radius } from './theme';
+import { colors, radius, spacing } from './theme';
+import { useLayout } from '../hooks/useLayout';
+import { Glass } from './Glass';
+import { NowPlayingPane } from './NowPlayingPane';
+import { LiveRailPane } from './LiveRailPane';
 
 // ------------------------------------------------------------------ //
-// Sub-components
+// Floating glass status pill (persistent chrome, all layouts)
 // ------------------------------------------------------------------ //
-
-function Waveform({ active }: { active: boolean }) {
-  const heights = [0.35, 0.65, 1.0, 0.55, 0.8];
-  const anims = useRef(heights.map(() => new Animated.Value(0.25))).current;
-
-  useEffect(() => {
-    if (!active) {
-      anims.forEach((a) =>
-        Animated.spring(a, { toValue: 0.25, useNativeDriver: false }).start()
-      );
-      return;
-    }
-    const loops = anims.map((anim, i) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(anim, {
-            toValue: heights[i],
-            duration: 350 + i * 90,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: false,
-          }),
-          Animated.timing(anim, {
-            toValue: 0.15,
-            duration: 350 + i * 90,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: false,
-          }),
-        ])
-      )
-    );
-    loops.forEach((l) => l.start());
-    return () => loops.forEach((l) => l.stop());
-  }, [active]);
-
-  return (
-    <View style={waveStyles.container}>
-      {anims.map((anim, i) => (
-        <Animated.View
-          key={i}
-          style={[
-            waveStyles.bar,
-            {
-              height: anim.interpolate({ inputRange: [0, 1], outputRange: [3, 28] }),
-              opacity: active ? 1 : 0.3,
-            },
-          ]}
-        />
-      ))}
-    </View>
-  );
-}
-
-const waveStyles = StyleSheet.create({
-  container: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, height: 32, marginBottom: 14 },
-  bar: { width: 3, borderRadius: 2, backgroundColor: colors.accent },
-});
-
-function ActivityLog({ entries }: { entries: ActivityEntry[] }) {
-  const scrollRef = useRef<ScrollView>(null);
-  useEffect(() => {
-    scrollRef.current?.scrollToEnd({ animated: true });
-  }, [entries.length]);
-
-  if (entries.length === 0) return null;
-
-  return (
-    <ScrollView
-      ref={scrollRef}
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      style={logStyles.scroll}
-      contentContainerStyle={logStyles.content}
-    >
-      <Text style={logStyles.text}>
-        {entries.map((e, i) => `${i > 0 ? ' · ' : ''}${e.message}`).join('')}
-      </Text>
-    </ScrollView>
-  );
-}
-
-const logStyles = StyleSheet.create({
-  scroll: { marginTop: 12 },
-  content: { paddingVertical: 2 },
-  text: { color: colors.textMuted, fontSize: 11, letterSpacing: 0.3 },
-});
-
-function BottomStatusBar({
-  status, message, listenerCount,
+function StatusPill({
+  status, message, listenerCount, bottomInset,
 }: {
-  status: RadioStatus; message: string; listenerCount: number;
+  status: RadioStatus; message: string; listenerCount: number; bottomInset: number;
 }) {
-  const dotColor = colors.accent;
   const dimmed = status === 'idle' || status === 'stopped' || status === 'connecting';
-
   const label =
     message ||
     (status === 'generating' ? 'Waiting for radio...' :
-     status === 'buffering'  ? 'Downloading track...' :
-     status === 'playing'    ? 'Playing' :
+     status === 'buffering' ? 'Downloading track...' :
+     status === 'playing' ? 'Playing' :
      status === 'connecting' ? 'Connecting...' : '');
 
   return (
-    <View style={sbStyles.bar}>
-      <View style={sbStyles.left}>
-        <View style={[sbStyles.dot, { backgroundColor: dimmed ? colors.textMuted : dotColor }]} />
-        <Text style={sbStyles.label} numberOfLines={1}>{label}</Text>
-      </View>
-      {listenerCount > 0 && (
-        <View style={sbStyles.countBadge}>
-          <MaterialIcons name="people" size={12} color={colors.textMuted} />
-          <Text style={sbStyles.countText}>{listenerCount}</Text>
+    <View style={[pillStyles.wrap, { bottom: bottomInset + spacing.md }]} pointerEvents="box-none">
+      <Glass borderRadius={radius.pill} variant="strong" floating style={pillStyles.pill}>
+        <View style={pillStyles.left}>
+          <View style={[pillStyles.dot, { backgroundColor: dimmed ? colors.textMuted : colors.accent }]} />
+          <Text style={pillStyles.label} numberOfLines={1}>{label}</Text>
         </View>
-      )}
+        {listenerCount > 0 && (
+          <View style={pillStyles.countBadge}>
+            <MaterialIcons name="people" size={12} color={colors.textMuted} />
+            <Text style={pillStyles.countText}>{listenerCount}</Text>
+          </View>
+        )}
+      </Glass>
     </View>
   );
 }
 
-const sbStyles = StyleSheet.create({
-  bar: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 10,
-    borderTopWidth: 1, borderTopColor: colors.border,
-    backgroundColor: colors.surface,
+const pillStyles = StyleSheet.create({
+  wrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
+  pill: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+    minWidth: 200, maxWidth: 460, gap: spacing.md,
   },
-  left: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
-  dot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
-  label: { color: colors.textDim, fontSize: 12, flex: 1 },
-  countBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border2 },
+  left: { flexDirection: 'row', alignItems: 'center', flexShrink: 1, gap: spacing.sm },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  label: { color: colors.textDim, fontSize: 12, flexShrink: 1 },
+  countBadge: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   countText: { color: colors.textMuted, fontSize: 11 },
 });
 
 // ------------------------------------------------------------------ //
-// Main RadioPlayer
+// Main RadioPlayer — responsive orchestrator
 // ------------------------------------------------------------------ //
 
 interface Props {
@@ -177,11 +95,11 @@ export function RadioPlayer({
   onChangeGenre, onClaimDj, onReact,
 }: Props) {
   const insets = useSafeAreaInsets();
+  const { sizeClass, isLandscape, contentMaxWidth } = useLayout();
   const isPlaying = status === 'playing' && !localPaused;
 
-  // Stop JS-thread animations and timers when the app is backgrounded.
-  // useNativeDriver:false Animated loops + setInterval both burn ~60% CPU
-  // in background and trigger iOS cpulimit kills within ~54 seconds.
+  // Stop JS-thread animations/timers in background — useNativeDriver:false
+  // Animated loops + setInterval burn CPU and trip the iOS cpulimit kill.
   const [isBackground, setIsBackground] = useState(false);
   const isBackgroundRef = useRef(false);
   useEffect(() => {
@@ -193,7 +111,7 @@ export function RadioPlayer({
     return () => sub.remove();
   }, []);
 
-  // Derive effective DJ locked state from timestamp (matches web logic)
+  // Tick once per second to refresh the DJ unlock countdown.
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => {
@@ -209,7 +127,7 @@ export function RadioPlayer({
       ? `${Math.floor(remainingSec / 60)}:${String(remainingSec % 60).padStart(2, '0')}`
       : '';
 
-  // Controller badge label (matches web)
+  // Genre / controller badge (matches web)
   const badgeLabel = track
     ? [
         !readonly ? 'CONTROLLER' : null,
@@ -220,177 +138,107 @@ export function RadioPlayer({
       ].filter(Boolean).join(' · ')
     : null;
 
+  const nowPlaying = (
+    <NowPlayingPane
+      track={track}
+      status={status}
+      sizeClass={sizeClass}
+      isPlaying={isPlaying}
+      isBackground={isBackground}
+      localPaused={localPaused}
+      progress={progress}
+      audioDuration={audioDuration}
+      badgeLabel={badgeLabel}
+      reactionState={reactionState}
+      onTogglePlayPause={onTogglePlayPause}
+      onSeekBackward={onSeekBackward}
+      onSeekForward={onSeekForward}
+      onReact={onReact}
+    />
+  );
+
+  const liveRail = (railStyle?: object) => (
+    <LiveRailPane
+      status={status}
+      statusMessage={statusMessage}
+      listenerCount={listenerCount}
+      track={track}
+      activityLog={activityLog}
+      effectiveDjLocked={effectiveDjLocked}
+      djCountdown={djCountdown}
+      errorMessage={errorMessage}
+      sizeClass={sizeClass}
+      onClaimDj={onClaimDj}
+      style={railStyle}
+    />
+  );
+
+  const pill = (
+    <StatusPill status={status} message={statusMessage} listenerCount={listenerCount} bottomInset={insets.bottom} />
+  );
+
+  // ---- Regular + landscape → two-pane (hero | glass rail) ----
+  if (sizeClass === 'regular' && isLandscape) {
+    return (
+      <View style={styles.root}>
+        <View
+          style={[
+            styles.landscapeRow,
+            { paddingTop: insets.top + spacing.lg, paddingBottom: insets.bottom + spacing.x3,
+              paddingLeft: insets.left + spacing.x2, paddingRight: insets.right + spacing.x2 },
+          ]}
+        >
+          <ScrollView style={styles.heroFlex} contentContainerStyle={styles.heroCentered}>
+            {nowPlaying}
+          </ScrollView>
+          {liveRail(styles.railFixed)}
+        </View>
+        {pill}
+      </View>
+    );
+  }
+
+  // ---- Regular + portrait → centered max-width single column ----
+  if (sizeClass === 'regular') {
+    return (
+      <View style={styles.root}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.portraitContent,
+            { paddingTop: insets.top + spacing.x2, paddingBottom: insets.bottom + 96 },
+          ]}
+        >
+          <View style={[styles.column, { maxWidth: contentMaxWidth }]}>
+            {nowPlaying}
+            {liveRail(styles.railFull)}
+            <Text style={styles.footer}>PRESENTED BY GENERATIVE RADIO</Text>
+          </View>
+        </ScrollView>
+        {pill}
+      </View>
+    );
+  }
+
+  // ---- Compact (phone) → restyled single column ----
   return (
     <View style={styles.root}>
-      {/* Scrollable main content */}
-      <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, { paddingTop: insets.top + 16 }]}>
-        {/* Top bar */}
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.compactContent,
+          { paddingTop: insets.top + spacing.lg, paddingBottom: insets.bottom + 88 },
+        ]}
+      >
         {!readonly && onChangeGenre && (
-          <View style={styles.topBar}>
-            <TouchableOpacity onPress={onChangeGenre}>
-              <Text style={styles.backBtn}>← Change Genres</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity onPress={onChangeGenre} style={styles.topBar}>
+            <Text style={styles.backBtn}>← Change Genres</Text>
+          </TouchableOpacity>
         )}
-
-        {/* Card */}
-        <View style={styles.card}>
-          {/* Genre / controller badge */}
-          {badgeLabel && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{badgeLabel}</Text>
-            </View>
-          )}
-
-          {/* Now playing */}
-          <Waveform active={isPlaying && !isBackground} />
-
-          {track ? (
-            <>
-              <Text style={styles.songTitle}>{track.songTitle}</Text>
-              {track.tags ? (
-                <Text style={styles.tags}>{track.tags}</Text>
-              ) : null}
-              <Text style={styles.meta}>
-                {[
-                  track.bpm ? `${track.bpm} BPM` : null,
-                  track.keyScale || null,
-                  audioDuration ? `${audioDuration}s` : track.duration ? `${track.duration}s` : null,
-                ].filter(Boolean).join(' · ')}
-              </Text>
-              {track.lyrics ? (
-                <ScrollView style={styles.lyricsScroll} nestedScrollEnabled>
-                  <Text style={styles.lyricsText}>{track.lyrics}</Text>
-                </ScrollView>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <Text style={styles.songTitle}>
-                {status === 'generating' ? 'Waiting for radio...' :
-                 status === 'buffering' ? 'Loading track...' :
-                 'Tuning in...'}
-              </Text>
-              <Text style={styles.tags}>
-                {status === 'generating' ? 'The next track is being generated' :
-                 status === 'buffering' ? 'Almost there...' :
-                 'Connecting to Generative Radio'}
-              </Text>
-            </>
-          )}
-
-          {/* Progress bar */}
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
-          </View>
-
-          {/* Transport controls */}
-          {track && (
-            <View style={styles.controls}>
-              <TouchableOpacity style={styles.iconBtn} onPress={onSeekBackward}>
-                <MaterialIcons name="replay-10" size={28} color={colors.textDim} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.playBtn} onPress={onTogglePlayPause}>
-                <MaterialIcons
-                  name={localPaused ? 'play-arrow' : 'pause'}
-                  size={32}
-                  color="#000"
-                />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.iconBtn} onPress={onSeekForward}>
-                <MaterialIcons name="forward-10" size={28} color={colors.textDim} />
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Reactions */}
-          {track && onReact && (
-            <View style={styles.reactions}>
-              <TouchableOpacity
-                style={[styles.reactionBtn, reactionState.userReaction === 'thumb_up' && styles.reactionBtnActive]}
-                onPress={() => onReact(track.id, 'thumb_up')}
-              >
-                <MaterialIcons
-                  name="thumb-up"
-                  size={16}
-                  color={reactionState.userReaction === 'thumb_up' ? colors.accent : colors.textDim}
-                />
-                <Text style={[styles.reactionCount, reactionState.userReaction === 'thumb_up' && styles.reactionCountActive]}>
-                  {reactionState.thumbUp}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.reactionBtn, reactionState.userReaction === 'thumb_down' && styles.reactionBtnActive]}
-                onPress={() => onReact(track.id, 'thumb_down')}
-              >
-                <MaterialIcons
-                  name="thumb-down"
-                  size={16}
-                  color={reactionState.userReaction === 'thumb_down' ? colors.accent : colors.textDim}
-                />
-                <Text style={[styles.reactionCount, reactionState.userReaction === 'thumb_down' && styles.reactionCountActive]}>
-                  {reactionState.thumbDown}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Activity log (horizontal scroll) */}
-          <ActivityLog entries={activityLog} />
-
-          {/* Error */}
-          {errorMessage && (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>⚠ {errorMessage}</Text>
-            </View>
-          )}
-
-          {/* DJ info row (visible when a DJ session is active) */}
-          {track?.djName && (
-            <View style={styles.djInfoRow}>
-              <Text style={styles.djInfoText}>
-                {[
-                  track.djName,
-                  track.genre
-                    ? (track.isRandom ? `Random · ${track.genre}` : track.genre)
-                    : null,
-                  track.djKeywords.length > 0 ? track.djKeywords.join(' · ') : null,
-                  track.djLanguage
-                    ? (track.djLanguage === 'instrumental' ? 'Instrumental' : track.djLanguage.toUpperCase())
-                    : null,
-                ].filter(Boolean).join('  ·  ')}
-              </Text>
-            </View>
-          )}
-
-          {/* DJ section — Generate Your Tracks button */}
-          {onClaimDj && (
-            <View style={styles.djSection}>
-              <TouchableOpacity
-                style={[styles.djBtn, effectiveDjLocked && styles.djBtnLocked]}
-                onPress={effectiveDjLocked ? undefined : onClaimDj}
-                disabled={effectiveDjLocked}
-              >
-                <Text style={[styles.djBtnText, effectiveDjLocked && styles.djBtnTextLocked]}>
-                  Generate Your Tracks
-                </Text>
-              </TouchableOpacity>
-              {effectiveDjLocked && djCountdown ? (
-                <Text style={styles.djCountdown}>Unlocks in {djCountdown}</Text>
-              ) : null}
-            </View>
-          )}
-        </View>
-
+        {nowPlaying}
+        {liveRail(styles.railFull)}
         <Text style={styles.footer}>PRESENTED BY GENERATIVE RADIO</Text>
       </ScrollView>
-
-      {/* Bottom status bar */}
-      <BottomStatusBar
-        status={status}
-        message={statusMessage}
-        listenerCount={listenerCount}
-      />
+      {pill}
     </View>
   );
 }
@@ -398,76 +246,22 @@ export function RadioPlayer({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   scroll: { flex: 1 },
-  content: { padding: 16, paddingBottom: 40 },
 
-  topBar: { marginBottom: 12 },
+  // Landscape two-pane
+  landscapeRow: { flex: 1, flexDirection: 'row', gap: spacing.x2 },
+  heroFlex: { flex: 1.6 },
+  heroCentered: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: spacing.lg },
+  railFixed: { width: 340, alignSelf: 'stretch' },
+
+  // Regular portrait
+  portraitContent: { paddingHorizontal: spacing.xl, alignItems: 'center' },
+  column: { width: '100%', alignSelf: 'center', gap: spacing.xl },
+  railFull: { width: '100%' },
+
+  // Compact
+  compactContent: { paddingHorizontal: spacing.lg, gap: spacing.xl },
+  topBar: { marginBottom: spacing.xs },
   backBtn: { color: colors.textDim, fontSize: 14 },
 
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-
-  // Badge
-  badge: {
-    alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: colors.accent,
-    borderRadius: radius.pill,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    marginBottom: 16,
-  },
-  badgeText: { fontFamily: fonts.semiBold, color: colors.accent, fontSize: 11, letterSpacing: 0.5 },
-
-  // Track info
-  songTitle: { fontFamily: fonts.display, fontSize: 28, letterSpacing: 1.5, color: colors.text, marginBottom: 6, textAlign: 'center' },
-  tags: { fontFamily: fonts.regular, fontSize: 12, color: colors.textMuted, marginBottom: 6, lineHeight: 18, textAlign: 'center' },
-  meta: { fontFamily: fonts.medium, fontSize: 11, color: colors.border2, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 10, textAlign: 'center' },
-
-  // Lyrics
-  lyricsScroll: { maxHeight: 100, marginTop: 8, marginBottom: 4 },
-  lyricsText: { color: colors.textMuted, fontSize: 12, lineHeight: 18 },
-
-  // Progress
-  progressBar: { height: 2, backgroundColor: colors.surface2, marginVertical: 16 },
-  progressFill: { height: 2, backgroundColor: colors.accent },
-
-  // Controls
-  controls: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 28, marginBottom: 16 },
-  iconBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surface2, justifyContent: 'center', alignItems: 'center' },
-  playBtn: { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.accent, justifyContent: 'center', alignItems: 'center' },
-
-  // Reactions
-  reactions: { flexDirection: 'row', gap: 8, marginBottom: 4, justifyContent: 'center' },
-  reactionBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border2,
-    backgroundColor: colors.surface2,
-  },
-  reactionBtnActive: { borderColor: colors.accent, backgroundColor: colors.accentDim },
-  reactionCount: { color: colors.textDim, fontSize: 13 },
-  reactionCountActive: { color: colors.accent },
-
-  // Error
-  errorBox: { marginTop: 12, padding: 12, backgroundColor: 'rgba(239,68,68,0.1)', borderRadius: radius.sm, borderWidth: 1, borderColor: colors.red },
-  errorText: { color: colors.red, fontSize: 13 },
-
-  // DJ info
-  djInfoRow: { marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border },
-  djInfoText: { color: colors.textMuted, fontSize: 12 },
-
-  // DJ button
-  djSection: { marginTop: 14 },
-  djBtn: { paddingVertical: 14, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center' },
-  djBtnLocked: { backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.border2 },
-  djBtnText: { color: '#000', fontSize: 14, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
-  djBtnTextLocked: { color: colors.textMuted },
-  djCountdown: { textAlign: 'center', color: colors.textMuted, fontSize: 12, marginTop: 6 },
-
-  footer: { textAlign: 'center', color: colors.textMuted, fontSize: 10, letterSpacing: 1, marginTop: 24, textTransform: 'uppercase' },
+  footer: { textAlign: 'center', color: colors.textMuted, fontSize: 10, letterSpacing: 1, marginTop: spacing.lg, textTransform: 'uppercase' },
 });
