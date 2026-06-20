@@ -12,7 +12,8 @@
       "backgroundColor": "#0a0a0f"
     },
     "ios": {
-      "supportsTablet": false,
+      "supportsTablet": true,
+      "buildNumber": "5",
       "bundleIdentifier": "com.generativeradio.app",
       "infoPlist": {
         "UIBackgroundModes": [
@@ -22,7 +23,13 @@
         "NSLocalNetworkUsageDescription": "Generative Radio connects to a local server on your network to stream music.",
         "NSBonjourServices": ["_http._tcp"],
         "NSBluetoothAlwaysUsageDescription": "Allow access to Bluetooth to connect to wireless audio speakers and headphones.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UISupportedInterfaceOrientations~ipad": [
+          "UIInterfaceOrientationPortrait",
+          "UIInterfaceOrientationPortraitUpsideDown",
+          "UIInterfaceOrientationLandscapeLeft",
+          "UIInterfaceOrientationLandscapeRight"
+        ]
       }
     },
     "android": {
@@ -33,6 +40,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.generativeradio.app",
+      "versionCode": 5,
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.INTERNET",

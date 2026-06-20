@@ -3,6 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { UseRadioReturn } from '../hooks/useRadio';
 import { RadioPlayer } from '../components/RadioPlayer';
 import { DJPanel } from '../components/DJPanel';
+import { IPadLayout } from '../components/iPadLayout';
 
 interface Props {
   radio: UseRadioReturn;
@@ -15,7 +16,7 @@ interface Props {
 export function AppNavigator({ radio }: Props) {
   const {
     status, currentTrack, statusMessage, errorMessage,
-    activityLog, progress, audioDuration, listenerCount, localPaused,
+    activityLog, progress, audioDuration, listenerCount, viewers, localPaused,
     djLocked, djUnlockAt, activeDjName, djPanelOpen, reactionState,
     togglePlayPause, seekBackward, seekForward,
     claimDj, submitDj, closeDjPanel, react,
@@ -24,27 +25,35 @@ export function AppNavigator({ radio }: Props) {
   return (
     <NavigationContainer>
       <>
-        <RadioPlayer
-          readonly
+        <IPadLayout
           track={currentTrack}
-          status={status}
-          statusMessage={statusMessage}
-          errorMessage={errorMessage}
           activityLog={activityLog}
-          progress={progress}
-          audioDuration={audioDuration}
           listenerCount={listenerCount}
-          localPaused={localPaused}
-          djLocked={djLocked}
-          djUnlockAt={djUnlockAt}
-          activeDjName={activeDjName}
-          reactionState={reactionState}
-          onTogglePlayPause={togglePlayPause}
-          onSeekBackward={seekBackward}
-          onSeekForward={seekForward}
-          onClaimDj={claimDj}
-          onReact={react}
-        />
+          viewers={viewers}
+          audioDuration={audioDuration}
+        >
+          <RadioPlayer
+            readonly
+            track={currentTrack}
+            status={status}
+            statusMessage={statusMessage}
+            errorMessage={errorMessage}
+            activityLog={activityLog}
+            progress={progress}
+            audioDuration={audioDuration}
+            listenerCount={listenerCount}
+            localPaused={localPaused}
+            djLocked={djLocked}
+            djUnlockAt={djUnlockAt}
+            activeDjName={activeDjName}
+            reactionState={reactionState}
+            onTogglePlayPause={togglePlayPause}
+            onSeekBackward={seekBackward}
+            onSeekForward={seekForward}
+            onClaimDj={claimDj}
+            onReact={react}
+          />
+        </IPadLayout>
         <DJPanel
           visible={djPanelOpen}
           onSubmit={submitDj}
