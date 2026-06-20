@@ -1,0 +1,19 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.backgroundhttp'
+version = '1.0.0'
+
+android {
+  namespace 'expo.modules.backgroundhttp'
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}
+
+// No extra dependencies: the module uses only the JDK (HttpURLConnection,
+// java.util.concurrent) plus the Expo Modules API provided by
+// expo-module-gradle-plugin.

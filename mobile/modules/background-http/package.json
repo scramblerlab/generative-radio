@@ -1,0 +1,7 @@
+{
+  "name": "background-http",
+  "version": "1.0.0",
+  "description": "Local Expo module: HTTP from Android background (survives expo prebuild --clean)",
+  "main": "index.ts",
+  "private": true
+}

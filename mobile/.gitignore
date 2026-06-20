@@ -39,3 +39,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# local Expo module build artifacts (modules/ itself is tracked)
+modules/*/android/build/
+modules/*/android/.gradle/
