@@ -19,6 +19,9 @@ export const colors = {
 export const radius = {
   sm:   8,
   md:   12,
+  // Concentric Liquid-Glass radii (rail > card > control nesting)
+  card: 20,
+  rail: 28,
   pill: 999,
 };
 
@@ -29,3 +32,48 @@ export const fonts = {
   semiBold:  'SpaceGrotesk_600SemiBold',
   bold:      'SpaceGrotesk_700Bold',
 };
+
+// 4pt spacing scale — replaces the hardcoded 16/20/28 values scattered
+// through the player styles.
+export const spacing = {
+  xs:  4,
+  sm:  8,
+  md:  12,
+  lg:  16,
+  xl:  24,
+  x2:  32,
+  x3:  48,
+};
+
+// Liquid-Glass surface tokens. Used by Glass.tsx for the BlurView /
+// translucent-View fallbacks (the native GlassView supplies its own material).
+export const glass = {
+  // Subtle warm tint so frosted panels read against the near-black bg.
+  tint:        'rgba(20, 20, 30, 0.55)',
+  tintStrong:  'rgba(12, 12, 20, 0.72)',
+  // Hairline highlight along the top edge of glass surfaces (depth cue).
+  hairline:    'rgba(255, 255, 255, 0.10)',
+  // Soft drop shadow for floating glass (status pill, DJ sheet).
+  shadowColor: '#000',
+  shadowOpacity: 0.35,
+  shadowRadius: 24,
+};
+
+export type SizeClass = 'compact' | 'regular';
+
+// Type scale tuned to the iPad mini 6 (744×1133pt) as the primary regular
+// target — 54pt Bebas reads large on its 8.3" panel without overflowing the
+// hero; larger iPads simply gain breathing room. Compact = phone.
+export function type(sizeClass: SizeClass) {
+  const regular = sizeClass === 'regular';
+  return {
+    title:   regular ? 54 : 34,
+    tags:    regular ? 15 : 12,
+    meta:    regular ? 13 : 11,
+    lyrics:  regular ? 14 : 12,
+    body:    regular ? 14 : 13,
+    label:   regular ? 12 : 11,
+    badge:   regular ? 12 : 11,
+    button:  regular ? 15 : 14,
+  };
+}
