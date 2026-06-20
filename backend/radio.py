@@ -1476,6 +1476,15 @@ class RadioOrchestrator:
         await self._send_to(ws, WSMessage(event="dj_claim_ack", data={"granted": True}))
         await self._broadcast_dj_state()
 
+    async def cancel_dj_claim_from_ws(self, ws: WebSocket) -> None:
+        """Release a pending DJ claim without submitting. Resets lock so any device can re-claim immediately."""
+        if ws != self._dj_claimant_ws:
+            return  # not the current claimant — ignore silently
+        self._dj_claimant_ws = None
+        self._dj_lock_until = time.time()  # expire lock immediately
+        logger.info("[radio] DJ claim cancelled — slot released")
+        await self._broadcast_dj_state()
+
     async def submit_dj_from_ws(
         self,
         ws: WebSocket,

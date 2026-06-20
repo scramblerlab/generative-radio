@@ -391,6 +391,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 await radio.skip_from_ws(websocket)
             elif event == "dj_claim":
                 await radio.claim_dj_from_ws(websocket)
+            elif event == "dj_cancel":
+                await radio.cancel_dj_claim_from_ws(websocket)
             elif event == "dj_submit":
                 event_data = data.get("data", {})
                 await radio.submit_dj_from_ws(

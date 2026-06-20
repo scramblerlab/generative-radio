@@ -1097,7 +1097,10 @@ export function useRadio(): UseRadioReturn {
     sendWS({ event: 'dj_submit', data: { genres, keywords, language, feeling, djName } });
   }, [sendWS]);
 
-  const closeDjPanel = useCallback(() => setDjPanelOpen(false), []);
+  const closeDjPanel = useCallback(() => {
+    setDjPanelOpen(false);
+    sendWS({ event: 'dj_cancel' });
+  }, [sendWS]);
 
   const react = useCallback(async (trackId: string, action: 'thumb_up' | 'thumb_down'): Promise<void> => {
     try {
