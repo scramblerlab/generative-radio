@@ -5,9 +5,7 @@ import {
 } from 'react-native';
 import { Genre, Keyword, Language } from '@radio/shared';
 import { BACKEND_URL } from '../config';
-import { colors, fonts, radius, spacing } from './theme';
-import { useLayout } from '../hooks/useLayout';
-import { Glass } from './Glass';
+import { colors, fonts, radius } from './theme';
 
 const MOOD_CATEGORY_ORDER = ['emotion', 'atmosphere', 'instrument'];
 const MOOD_CATEGORY_LABELS: Record<string, string> = {
@@ -37,8 +35,6 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
   const [djName, setDjName] = useState('');
   const [nameError, setNameError] = useState(false);
   const [loading, setLoading] = useState(true);
-  const { sizeClass } = useLayout();
-  const isSheet = sizeClass === 'regular';
 
   useEffect(() => {
     if (!visible) return;
@@ -117,10 +113,11 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
     onSubmit(genreArg, keywordList, selectedLanguage, feeling, djName.trim());
   };
 
-  const inner = (
-    <>
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.container}>
         {/* Header — centered, no close button (Cancel is in footer) */}
-        <View style={[styles.header, isSheet && styles.headerSheet]}>
+        <View style={styles.header}>
           <Text style={styles.title}>You're the DJ!</Text>
           <Text style={styles.subtitle}>Pick the vibe — your selections will drive the next tracks for everyone</Text>
         </View>
@@ -130,7 +127,7 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
             <ActivityIndicator color={colors.accent} />
           </View>
         ) : (
-          <ScrollView style={styles.scrollFlex} contentContainerStyle={styles.content}>
+          <ScrollView contentContainerStyle={styles.content}>
 
             {/* Genre */}
             <Text style={styles.sectionLabel}>Choose your genre</Text>
@@ -256,41 +253,16 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
             <Text style={styles.cancelBtnText}>Cancel</Text>
           </TouchableOpacity>
         </View>
-    </>
-  );
-
-  return (
-    <Modal
-      visible={visible}
-      transparent={isSheet}
-      animationType={isSheet ? 'fade' : 'slide'}
-      onRequestClose={onClose}
-      supportedOrientations={['portrait', 'landscape']}
-    >
-      {isSheet ? (
-        <View style={styles.backdrop}>
-          <Glass borderRadius={radius.rail} variant="strong" floating style={styles.sheet}>
-            {inner}
-          </Glass>
-        </View>
-      ) : (
-        <View style={styles.container}>{inner}</View>
-      )}
+      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   container:    { flex: 1, backgroundColor: colors.bg },
-  scrollFlex:   { flex: 1 },
-
-  // Regular width — centered glass sheet over a dimmed backdrop
-  backdrop:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: spacing.xl },
-  sheet:        { width: '100%', maxWidth: 560, maxHeight: '88%' },
 
   // Header — centered
   header:       { alignItems: 'center', padding: 20, paddingTop: 60, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: colors.border },
-  headerSheet:  { paddingTop: 24 },
   title:        { fontFamily: 'BebasNeue_400Regular', fontSize: 32, color: colors.text, letterSpacing: 1 },
   subtitle:     { fontSize: 13, color: colors.textMuted, marginTop: 6, textAlign: 'center', letterSpacing: 0.3 },
 
