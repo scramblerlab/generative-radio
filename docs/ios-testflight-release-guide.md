@@ -116,11 +116,50 @@ This propagates into `Info.plist` automatically when Expo generates the native p
 
 ---
 
+## Agreements: Apple Developer Portal vs App Store Connect (PLA gotcha)
+
+Apple periodically issues a new **Program License Agreement (PLA)**. Until it's accepted, the developer API rejects code-signing operations, so an upload from the Xcode Organizer fails with **two** errors that look unrelated but aren't:
+
+```
+Unable to process request - PLA Update available
+  You currently don't have access to this membership resource. To resolve
+  this issue, agree to the latest Program License Agreement in your developer account.
+
+No signing certificate "iOS Distribution" found
+  No "iOS Distribution" signing certificate matching team ID "GXWN8P2ZSF"
+  with a private key was found.
+```
+
+The certificate error is a **downstream effect** of the PLA block — with the agreement outstanding, automatic signing can't create or download the distribution certificate. **Accept the PLA first, then retry; the cert error usually clears on its own.**
+
+**The critical confusion: there are two separate agreement surfaces.**
+
+| Surface | URL | What lives there |
+|---|---|---|
+| **Apple Developer portal** | [developer.apple.com/account](https://developer.apple.com/account) | The **Program License Agreement (PLA)** ← this is the one that blocks uploads |
+| **App Store Connect** → Agreements, Tax, and Banking | [appstoreconnect.apple.com](https://appstoreconnect.apple.com) | The **Paid Applications Agreement** (payouts) — *not* what's blocking the upload |
+
+If you check App Store Connect and "no new agreement is shown," that's expected — you're looking at the wrong surface. The PLA prompt only appears in the **Developer portal**.
+
+**To accept it:**
+
+1. Sign in at **[developer.apple.com/account](https://developer.apple.com/account)** as the **Account Holder** (only the Account Holder can accept the PLA — Admin/Developer roles cannot).
+2. Accept the **"Review Agreement"** banner / modal that appears right after sign-in (check the top of the page or **Membership details**).
+3. Return to the Xcode Organizer, **Cancel** the failed distribution, and run **Distribute App** again.
+
+**If the cert error persists after accepting the PLA** (genuinely missing cert or missing private key — e.g. the cert was created on a different Mac, so its private key isn't in this Mac's Keychain):
+
+- **Xcode → Settings → Accounts** → select the Apple ID → **Manage Certificates…** → **＋** → **Apple Distribution**. This mints a fresh distribution certificate with its private key in this Mac's login Keychain. Then retry.
+- Or import the existing cert as a `.p12` (with private key) exported from the Mac that created it, to avoid accumulating distribution certs (there's a per-account limit).
+
+---
+
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
 | "No provisioning profile" on Release | Xcode → Settings → Accounts → Download Manual Profiles |
+| Upload fails: "PLA Update available" + "No iOS Distribution certificate found" | Accept the Program License Agreement at [developer.apple.com/account](https://developer.apple.com/account) as Account Holder — **not** in App Store Connect. See [Agreements: Apple Developer Portal vs App Store Connect](#agreements-apple-developer-portal-vs-app-store-connect-pla-gotcha). |
 | Upload rejected: duplicate build number | Increment `CURRENT_PROJECT_VERSION` and re-archive |
 | Build stuck in "Processing" | Wait; if over 30 min, check App Store Connect email for errors |
 | JS bundle not found at runtime | Re-run Step 3 before archiving |
