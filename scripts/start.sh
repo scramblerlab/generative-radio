@@ -6,6 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ACESTEP_DIR="${ACESTEP_PATH:-$(dirname "$PROJECT_DIR")/ACE-Step-1.5}"
+source "$SCRIPT_DIR/lib.sh"
 
 echo ""
 echo "╔══════════════════════════════════════╗"
@@ -98,13 +99,7 @@ if [[ -n "$STALE_BACKEND" ]]; then
 fi
 
 VENV="$PROJECT_DIR/backend/.venv"
-if [ ! -f "$VENV/bin/uvicorn" ]; then
-  echo ""
-  echo "  ERROR: Python venv not found at backend/.venv"
-  echo "  Run ./scripts/setup.sh first."
-  echo ""
-  exit 1
-fi
+ensure_backend_venv "$PROJECT_DIR"
 
 cd "$PROJECT_DIR/backend"
 ALLOW_QUICK_TUNNEL=1 "$VENV/bin/uvicorn" main:app \
