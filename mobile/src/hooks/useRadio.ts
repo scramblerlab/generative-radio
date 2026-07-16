@@ -22,6 +22,12 @@ import { BACKEND_URL, WS_URL } from '../config';
 import { downloadAudio } from '../utils/downloadAudio';
 import { fetchStatusNative, sendTrackEndedNative } from '../modules/backgroundHttp';
 import type { StatusResult } from '../modules/backgroundHttp';
+import {
+  OfflineTrackMeta,
+  offlineTrackUri,
+  metaToTrack,
+  shuffled,
+} from '../utils/offlineLibrary';
 
 // ------------------------------------------------------------------ //
 // Types
@@ -61,6 +67,11 @@ export interface UseRadioReturn {
   // Reactions
   reactionState: ReactionState;
   react: (trackId: string, action: 'thumb_up' | 'thumb_down') => Promise<void>;
+  // Offline mode
+  offlineMode: boolean;
+  offlineTrackCount: number;
+  enterOfflineMode: (tracks: OfflineTrackMeta[]) => void;
+  exitOfflineMode: () => void;
 }
 
 const RECONNECT_BASE_MS = 1_000;
@@ -112,6 +123,12 @@ export function useRadio(): UseRadioReturn {
   const [reactionState, setReactionState] = useState<ReactionState>(emptyReaction);
   const reactionStateRef = useRef<ReactionState>(emptyReaction);
 
+  // Offline mode
+  const [offlineMode, setOfflineModeState] = useState(false);
+  const offlineModeRef = useRef(false);
+  const setOfflineMode = (v: boolean) => { offlineModeRef.current = v; setOfflineModeState(v); };
+  const [offlineTrackCount, setOfflineTrackCount] = useState(0);
+
   // ------------------------------------------------------------------ //
   // Refs (no re-render)
   // ------------------------------------------------------------------ //
@@ -147,6 +164,11 @@ export function useRadio(): UseRadioReturn {
   const silencePlayerRef = useRef<AudioPlayer | null>(null); // silence bridge
   const isBridgingRef = useRef(false);                       // silence bridge active?
   const bgStatusCleanupRef = useRef<(() => void) | null>(null); // Android: cancel in-flight native status fetch listener
+
+  // Offline playback refs
+  const offlineTracksRef   = useRef<Map<string, OfflineTrackMeta>>(new Map()); // id → meta
+  const offlineQueueRef    = useRef<string[]>([]);   // shuffled ids
+  const offlineQueuePosRef = useRef(-1);             // index of currently playing entry
 
   // ------------------------------------------------------------------ //
   // expo-audio setup
@@ -301,6 +323,69 @@ export function useRadio(): UseRadioReturn {
   }, []);
 
   // ------------------------------------------------------------------ //
+  // Shared playbackStatusUpdate listener (online + offline players)
+  // ------------------------------------------------------------------ //
+
+  const attachStatusListener = useCallback((player: AudioPlayer) => {
+    playerSubRef.current?.remove();
+    let wasPlaying = player.playing;
+    playerSubRef.current = player.addListener('playbackStatusUpdate', (status) => {
+      if (status.playbackState === 'failed') {
+        if (localPausedRef.current || isFetchingRef.current) return;
+        if (offlineModeRef.current) {
+          // Corrupt/missing local file — drop it from the pool and advance.
+          console.error('[Offline] playback failed — skipping track', currentTrackIdRef.current);
+          dropOfflineTrack(currentTrackIdRef.current);
+          playNextOfflineRef.current?.();
+        } else {
+          console.error('[Audio] playbackState=failed — re-downloading current track');
+          currentTrackIdRef.current = null;
+          setRadioState('error');
+          setErrorMessage('Playback failed — recovering...');
+          fetchAndPlayRef.current?.();
+        }
+        return;
+      }
+      if (status.didJustFinish) {
+        console.log('[Audio] didJustFinish — bg:', isBackgroundRef.current, 'paused:', localPausedRef.current, 'fetching:', isFetchingRef.current, 'offline:', offlineModeRef.current);
+        if (!localPausedRef.current) handleTrackEndedRef.current?.();
+        return;
+      }
+      // Detect external pause/resume caused by the media widget (Android MediaSession
+      // or iOS lock-screen controls) which update native state without going through JS.
+      // Sync localPausedRef so togglePlayPause(), handleWake(), and didJustFinish guards
+      // all see consistent intent state.
+      if (status.isLoaded && wasPlaying && !status.playing && !localPausedRef.current) {
+        if (status.isBuffering) {
+          // Momentary pause while buffering — not an external stop.
+          console.warn(
+            '[Audio] ⚠️ player buffering — bg:', isBackgroundRef.current,
+            'pos:', status.currentTime?.toFixed(1), '/', status.duration?.toFixed(1)
+          );
+        } else {
+          // Widget (or OS) paused/stopped the player externally — sync JS intent.
+          console.log(
+            '[Audio] Player stopped externally (widget/OS) — syncing pause state',
+            'bg:', isBackgroundRef.current,
+            'playbackState:', (status as Record<string, unknown>).playbackState ?? '?'
+          );
+          localPausedRef.current = true;
+          setLocalPaused(true);
+          setRadioState('paused');
+        }
+      }
+      // Detect external resume: widget played while user-intent was paused.
+      if (status.isLoaded && !wasPlaying && status.playing && localPausedRef.current) {
+        console.log('[Audio] Player resumed externally (widget/OS) — syncing play state');
+        localPausedRef.current = false;
+        setLocalPaused(false);
+        setRadioState('playing');
+      }
+      if (status.isLoaded) wasPlaying = status.playing;
+    });
+  }, []);
+
+  // ------------------------------------------------------------------ //
   // Platform-specific background strategies
   // ------------------------------------------------------------------ //
 
@@ -308,7 +393,10 @@ export function useRadio(): UseRadioReturn {
    *  listener alive (Android needs it for didJustFinish) and pre-starts the silence
    *  bridge so the foreground media service is uninterrupted through the transition. */
   const handleBackgroundAndroid = useCallback(() => {
-    if (playerRef.current?.playing && !localPausedRef.current && !isBridgingRef.current) {
+    // Offline playback needs no service-continuity bridge (zero network); a
+    // bridge left running would set isBridgingRef=true and freeze the progress
+    // UI (startProgressTimer skips ticks while bridging) until the next track.
+    if (!offlineModeRef.current && playerRef.current?.playing && !localPausedRef.current && !isBridgingRef.current) {
       startSilenceBridge();
       console.log('[BG] Android — silence bridge pre-started for service continuity');
     }
@@ -343,31 +431,9 @@ export function useRadio(): UseRadioReturn {
    *  playbackStatusUpdate listener that was removed on background. */
   const handleForegroundIOS = useCallback((wasBackground: boolean) => {
     if (!wasBackground || !playerRef.current || playerSubRef.current) return;
-    let wasPlayingResume = playerRef.current.playing;
-    playerSubRef.current = playerRef.current.addListener('playbackStatusUpdate', (status) => {
-      if (status.playbackState === 'failed') {
-        // Mirrors the failure recovery in fetchAndPlay's listener (see there).
-        if (!localPausedRef.current && !isFetchingRef.current) {
-          console.error('[Audio] playbackState=failed — re-downloading current track');
-          currentTrackIdRef.current = null;
-          setRadioState('error');
-          setErrorMessage('Playback failed — recovering...');
-          fetchAndPlayRef.current?.();
-        }
-        return;
-      }
-      if (status.didJustFinish) {
-        console.log('[Audio] didJustFinish — bg:', isBackgroundRef.current, 'paused:', localPausedRef.current, 'fetching:', isFetchingRef.current);
-        if (!localPausedRef.current) handleTrackEndedRef.current?.();
-        return;
-      }
-      if (status.isLoaded && wasPlayingResume && !status.playing && !localPausedRef.current) {
-        console.warn('[Audio] ⚠️ player stopped unexpectedly — bg:', isBackgroundRef.current, 'isBuffering:', status.isBuffering, 'pos:', status.currentTime?.toFixed(1), '/', status.duration?.toFixed(1));
-      }
-      if (status.isLoaded) wasPlayingResume = status.playing;
-    });
+    attachStatusListener(playerRef.current);
     console.log('[BG] iOS — playbackStatusUpdate listener restored');
-  }, []);
+  }, [attachStatusListener]);
 
   /** Android-only: process the native BackgroundHttp.statusResult event.
    *  On success with a new track, calls fetchAndPlay(track) to reuse all
@@ -432,6 +498,98 @@ export function useRadio(): UseRadioReturn {
   }, [handleNativeStatusResult, startSilenceBridge]);
 
   // ------------------------------------------------------------------ //
+  // Offline playback
+  // ------------------------------------------------------------------ //
+
+  const playNextOfflineRef = useRef<(() => void) | null>(null);
+
+  const dropOfflineTrack = (id: string | null) => {
+    if (!id) return;
+    offlineTracksRef.current.delete(id);
+    offlineQueueRef.current = offlineQueueRef.current.filter((x) => x !== id);
+    if (offlineQueuePosRef.current >= offlineQueueRef.current.length) offlineQueuePosRef.current = -1;
+    setOfflineTrackCount(offlineTracksRef.current.size);
+  };
+
+  const playOfflineTrack = useCallback((meta: OfflineTrackMeta) => {
+    if (!playerReadyRef.current) return;
+    stopSilenceBridge();                                  // never bridge offline
+    playerRef.current?.remove(); playerRef.current = null;
+
+    const player = createAudioPlayer(
+      { uri: offlineTrackUri(meta.trackId) },
+      { keepAudioSessionActive: true, updateInterval: 60_000 },  // identical to online
+    );
+    attachStatusListener(player);                          // also tears down the old subscription
+    player.setActiveForLockScreen(true, {
+      title: meta.songTitle ?? 'Unknown Track',
+      artist: meta.genreLabel ?? 'Offline',
+      albumTitle: 'Generative Radio — Offline',
+    }, { showSeekForward: true, showSeekBackward: true });
+
+    playerRef.current = player;
+    localPausedRef.current = false; setLocalPaused(false);
+    player.play();
+
+    currentTrackIdRef.current = meta.trackId;
+    setCurrentTrack(metaToTrack(meta));
+    setRadioState('playing');
+    setStatusMessage(`Offline mode — ${offlineTracksRef.current.size} tracks`);
+    setErrorMessage(null);
+    setProgress(0);
+    setAudioDuration(meta.duration ?? null);
+
+    // Mirror fetchAndPlay's iOS bg-transition block: when a new track starts
+    // while backgrounded, suspend the listener and arm a duration-based backup
+    // timer (didJustFinish delivery is unreliable in throttled bg JS).
+    if (Platform.OS === 'ios' && isBackgroundRef.current) {
+      playerSubRef.current?.remove(); playerSubRef.current = null;
+      if (bgTrackEndTimerRef.current) clearTimeout(bgTrackEndTimerRef.current);
+      const ms = (meta.duration ?? 0) * 1000;
+      if (ms > 0) {
+        bgTrackEndTimerRef.current = setTimeout(() => {
+          if (isBackgroundRef.current && !localPausedRef.current && !isFetchingRef.current) {
+            handleTrackEndedRef.current?.();
+          }
+        }, ms + 3_000);
+      }
+    }
+  }, [attachStatusListener, stopSilenceBridge]);
+
+  const playNextOffline = useCallback(() => {
+    const tracks = offlineTracksRef.current;
+    if (tracks.size === 0) {
+      setRadioState('error');
+      setErrorMessage('No offline tracks available');
+      return;
+    }
+    let queue = offlineQueueRef.current;
+    offlineQueuePosRef.current += 1;
+    if (offlineQueuePosRef.current >= queue.length) {
+      // Exhausted → reshuffle; avoid immediate repeat of the last-played id.
+      const lastPlayed = currentTrackIdRef.current;
+      queue = shuffled([...tracks.keys()]);
+      if (queue.length > 1 && queue[0] === lastPlayed) {
+        const j = 1 + Math.floor(Math.random() * (queue.length - 1));
+        [queue[0], queue[j]] = [queue[j], queue[0]];
+      }
+      offlineQueueRef.current = queue;
+      offlineQueuePosRef.current = 0;
+    }
+    const meta = tracks.get(queue[offlineQueuePosRef.current]);
+    if (!meta) { playNextOfflineRef.current?.(); return; }       // id evaporated — advance (bounded: queue shrank)
+    try {
+      playOfflineTrack(meta);
+    } catch (err) {
+      console.error('[Offline] play failed for', meta.trackId, err);
+      dropOfflineTrack(meta.trackId);
+      if (offlineTracksRef.current.size > 0) playNextOfflineRef.current?.();
+      else { setRadioState('error'); setErrorMessage('No playable offline tracks'); }
+    }
+  }, [playOfflineTrack]);
+  useEffect(() => { playNextOfflineRef.current = playNextOffline; }, [playNextOffline]);
+
+  // ------------------------------------------------------------------ //
   // Polling
   // ------------------------------------------------------------------ //
 
@@ -451,6 +609,7 @@ export function useRadio(): UseRadioReturn {
   }, []);
 
   const startPolling = useCallback(() => {
+    if (offlineModeRef.current) return;
     if (pollTimerRef.current) return;
     console.log('[Radio] Starting poll (10s interval)');
     setRadioState('polling');
@@ -477,6 +636,7 @@ export function useRadio(): UseRadioReturn {
 
   // prefetchedTrack: Android background supplies this from native HTTP to skip JS fetch()
   const fetchAndPlay = useCallback(async (prefetchedTrack?: Track) => {
+    if (offlineModeRef.current) { console.log('[F&P] offline — skipping'); return; }
     console.log('[F&P] enter — bg:', isBackgroundRef.current, 'fetching:', isFetchingRef.current, 'paused:', localPausedRef.current, 'prefetched:', !!prefetchedTrack);
     if (isFetchingRef.current) {
       console.log('[F&P] mutex held, skipping');
@@ -575,68 +735,9 @@ export function useRadio(): UseRadioReturn {
       );
       console.log('[Audio] ✅ Music player created — keepAudioSessionActive:true updateInterval:60s');
 
-      // Detect track end via didJustFinish in status updates.
-      // Store the subscription so we can remove it when backgrounding (to stop
-      // 500 ms JS wakeups). didJustFinish is also delivered via a separate
-      // AVPlayerItemDidPlayToEndTime path in expo-audio, independent of the
-      // periodic updateInterval, so track-end detection survives even when the
-      // subscription is suspended.
-      playerSubRef.current?.remove();
-      let wasPlaying = true;
-      playerSubRef.current = player.addListener('playbackStatusUpdate', (status) => {
-        if (status.playbackState === 'failed') {
-          // expo-audio has no error event — a failed AVPlayerItem (e.g. corrupt
-          // local file) surfaces only here. Reset the track id so fetchAndPlay
-          // re-downloads instead of looping the same-track 6s retry, and so
-          // sendTrackEnded is suppressed (the server must not advance).
-          if (!localPausedRef.current && !isFetchingRef.current) {
-            console.error('[Audio] playbackState=failed — re-downloading current track');
-            currentTrackIdRef.current = null;
-            setRadioState('error');
-            setErrorMessage('Playback failed — recovering...');
-            fetchAndPlayRef.current?.();
-          }
-          return;
-        }
-        if (status.didJustFinish) {
-          console.log('[Audio] didJustFinish — bg:', isBackgroundRef.current, 'paused:', localPausedRef.current, 'fetching:', isFetchingRef.current);
-          if (!localPausedRef.current) {
-            handleTrackEndedRef.current?.();
-          }
-          return;
-        }
-        // Detect external pause/resume caused by the media widget (Android MediaSession
-        // or iOS lock-screen controls) which update native state without going through JS.
-        // Sync localPausedRef so togglePlayPause(), handleWake(), and didJustFinish guards
-        // all see consistent intent state.
-        if (status.isLoaded && wasPlaying && !status.playing && !localPausedRef.current) {
-          if (status.isBuffering) {
-            // Momentary pause while buffering — not an external stop.
-            console.warn(
-              '[Audio] ⚠️ player buffering — bg:', isBackgroundRef.current,
-              'pos:', status.currentTime?.toFixed(1), '/', status.duration?.toFixed(1)
-            );
-          } else {
-            // Widget (or OS) paused/stopped the player externally — sync JS intent.
-            console.log(
-              '[Audio] Player stopped externally (widget/OS) — syncing pause state',
-              'bg:', isBackgroundRef.current,
-              'playbackState:', (status as Record<string, unknown>).playbackState ?? '?'
-            );
-            localPausedRef.current = true;
-            setLocalPaused(true);
-            setRadioState('paused');
-          }
-        }
-        // Detect external resume: widget played while user-intent was paused.
-        if (status.isLoaded && !wasPlaying && status.playing && localPausedRef.current) {
-          console.log('[Audio] Player resumed externally (widget/OS) — syncing play state');
-          localPausedRef.current = false;
-          setLocalPaused(false);
-          setRadioState('playing');
-        }
-        if (status.isLoaded) wasPlaying = status.playing;
-      });
+      // Detect track end via didJustFinish in status updates. Shared listener
+      // (also used by offline playback) — see attachStatusListener above.
+      attachStatusListener(player);
 
       // Register for lock screen controls (also required on Android for
       // sustained background playback beyond ~3 min)
@@ -703,7 +804,7 @@ export function useRadio(): UseRadioReturn {
 
     isFetchingRef.current = false;
     console.log('[F&P] done — playing (bg:', isBackgroundRef.current, ')');
-  }, [sendTrackEnded, startPolling, stopPolling, startSilenceBridge, stopSilenceBridge, fetchReactions]);
+  }, [sendTrackEnded, startPolling, stopPolling, startSilenceBridge, stopSilenceBridge, fetchReactions, attachStatusListener]);
 
   // Keep the refs in sync so polling and other callbacks always call the latest version
   useEffect(() => {
@@ -718,6 +819,11 @@ export function useRadio(): UseRadioReturn {
     console.log('[Radio] handleTrackEnded — track:', currentTrackIdRef.current, 'bg:', isBackgroundRef.current, 'platform:', Platform.OS, 'paused:', localPausedRef.current, 'fetching:', isFetchingRef.current);
     if (localPausedRef.current) { console.log('[Radio] handleTrackEnded: skipped — paused'); return; }
     if (isFetchingRef.current) { console.log('[Radio] handleTrackEnded: skipped — already fetching'); return; }
+
+    if (offlineModeRef.current) {
+      playNextOfflineRef.current?.();
+      return;
+    }
 
     if (Platform.OS === 'android' && isBackgroundRef.current) {
       // Android background: JS fetch() hangs in Doze — use native HTTP module instead.
@@ -746,6 +852,19 @@ export function useRadio(): UseRadioReturn {
 
     if (localPausedRef.current) return;            // user paused / tuned out
     if (radioStateRef.current === 'idle') return;
+
+    if (offlineModeRef.current) {
+      // Clear any bridge handleBackgroundAndroid may have pre-started — a
+      // lingering isBridgingRef freezes the progress UI (startProgressTimer
+      // skips ticks while bridging) until the next track calls stopSilenceBridge().
+      stopSilenceBridge();
+      if (playerRef.current?.playing) return;
+      try { playerRef.current?.play(); } catch {}
+      await new Promise<void>((r) => setTimeout(r, 1_000));
+      if (!playerRef.current?.playing && !localPausedRef.current) playNextOfflineRef.current?.();
+      return;
+    }
+
     if (playerRef.current?.playing) return;        // already audible
 
     if (radioStateRef.current === 'playing' && playerRef.current && playerReadyRef.current) {
@@ -772,13 +891,14 @@ export function useRadio(): UseRadioReturn {
     // lives inside fetchAndPlay (same-track no-op / retry, no-track → poll).
     stopPolling();
     await fetchAndPlay();
-  }, [fetchAndPlay, stopPolling]);
+  }, [fetchAndPlay, stopPolling, stopSilenceBridge]);
 
   // ------------------------------------------------------------------ //
   // WebSocket
   // ------------------------------------------------------------------ //
 
   const connectWebSocket = useCallback(() => {
+    if (offlineModeRef.current) return;
     if (!isActiveRef.current) return;
     console.log('[WS] Connecting to', WS_URL);
 
@@ -982,7 +1102,7 @@ export function useRadio(): UseRadioReturn {
         // Android: listener was never removed, so this is a no-op there.
         if (Platform.OS === 'ios') handleForegroundIOS(wasBackground);
         // Reconnect WS (closed in 'inactive' on iOS, 'background' on Android).
-        if (wsRef.current === null) connectWebSocket();
+        if (wsRef.current === null && !offlineModeRef.current) connectWebSocket();
         handleWake();
       } else if (nextState === 'background') {
         isBackgroundRef.current = true;
@@ -1079,6 +1199,63 @@ export function useRadio(): UseRadioReturn {
     }
   }, [stopPolling, stopSilenceBridge]);
 
+  const enterOfflineMode = useCallback((tracks: OfflineTrackMeta[]) => {
+    if (tracks.length === 0) return;
+    setOfflineMode(true);
+    // ---- suppress ALL server activity ----
+    stopPolling();                                        // pollTimerRef
+    fetchEpochRef.current++;                              // invalidate any in-flight fetchAndPlay
+    isFetchingRef.current = false;
+    if (wsRef.current) {                                  // close WS exactly like the 'inactive' handler
+      const dyingWs = wsRef.current; wsRef.current = null;
+      dyingWs.onclose = null; dyingWs.close();
+    }
+    if (pingIntervalRef.current) { clearInterval(pingIntervalRef.current); pingIntervalRef.current = null; }
+    if (reconnectTimer.current)  { clearTimeout(reconnectTimer.current);   reconnectTimer.current  = null; }
+    if (bgTrackEndTimerRef.current) { clearTimeout(bgTrackEndTimerRef.current); bgTrackEndTimerRef.current = null; }
+    if (bgWaitCapTimerRef.current)  { clearTimeout(bgWaitCapTimerRef.current);  bgWaitCapTimerRef.current  = null; }
+    bgStatusCleanupRef.current?.(); bgStatusCleanupRef.current = null;    // Android native fetch listener
+    stopSilenceBridge();
+    // ---- reset online-only UI state ----
+    setListenerCount(0); setViewers([]); setActivityLog([]);
+    setReactionState(emptyReaction); reactionStateRef.current = emptyReaction;
+    setErrorMessage(null);
+    // ---- build queue & play ----
+    offlineTracksRef.current = new Map(tracks.map((t) => [t.trackId, t]));
+    setOfflineTrackCount(tracks.length);
+    offlineQueueRef.current = [];
+    offlineQueuePosRef.current = -1;      // playNextOffline will shuffle on first call
+    currentTrackIdRef.current = null;
+    localPausedRef.current = false; setLocalPaused(false);
+    playNextOffline();
+  }, [stopPolling, stopSilenceBridge, playNextOffline]);
+
+  const exitOfflineMode = useCallback(() => {
+    if (!offlineModeRef.current) return;
+    setOfflineMode(false);
+    if (bgTrackEndTimerRef.current) { clearTimeout(bgTrackEndTimerRef.current); bgTrackEndTimerRef.current = null; }
+    playerSubRef.current?.remove(); playerSubRef.current = null;
+    try {
+      playerRef.current?.clearLockScreenControls();       // same teardown as tuneOut
+      playerRef.current?.pause();
+      playerRef.current?.remove();
+    } catch {}
+    playerRef.current = null;
+    offlineTracksRef.current = new Map();
+    offlineQueueRef.current = [];
+    offlineQueuePosRef.current = -1;
+    setOfflineTrackCount(0);
+    currentTrackIdRef.current = null;
+    setCurrentTrack(null); setProgress(0); setAudioDuration(null);
+    setStatusMessage(''); setErrorMessage(null);
+    isFetchingRef.current = false;
+    fetchEpochRef.current++;
+    localPausedRef.current = false; setLocalPaused(false);
+    setRadioState('fetching');
+    connectWebSocket();                                   // wsRef is null → connects
+    fetchAndPlayRef.current?.();                          // resume server-driven radio
+  }, [connectWebSocket]);
+
   const saveTrack = useCallback(async (trackId: string): Promise<void> => {
     const res = await fetch(`${BACKEND_URL}/api/tracks/${trackId}/save`, { method: 'POST' });
     if (!res.ok) {
@@ -1103,6 +1280,7 @@ export function useRadio(): UseRadioReturn {
   }, [sendWS]);
 
   const react = useCallback(async (trackId: string, action: 'thumb_up' | 'thumb_down'): Promise<void> => {
+    if (offlineModeRef.current) return;
     try {
       const res = await fetch(`${BACKEND_URL}/api/tracks/${trackId}/react`, {
         method: 'POST',
@@ -1188,5 +1366,6 @@ export function useRadio(): UseRadioReturn {
     djLocked, djUnlockAt, activeDjName, djPanelOpen,
     claimDj, submitDj, closeDjPanel,
     reactionState, react,
+    offlineMode, offlineTrackCount, enterOfflineMode, exitOfflineMode,
   };
 }
