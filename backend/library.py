@@ -239,6 +239,26 @@ class TrackLibrary:
             self._index.pop(track_id, None)
             return None
 
+    def all_meta(self) -> list[dict]:
+        """All sidecar metadata dicts, newest first. Empty when disabled."""
+        if not self.enabled:
+            return []
+        return sorted(
+            self._index.values(),
+            key=lambda m: m.get("createdAt", ""),
+            reverse=True,
+        )
+
+    def get_meta(self, track_id: str) -> dict | None:
+        return self._index.get(track_id) if self.enabled else None
+
+    def audio_path(self, track_id: str) -> Path | None:
+        """Absolute path to the mp3, only for track_ids present in the index."""
+        if not self.enabled or track_id not in self._index:
+            return None
+        path = self.dir / f"{track_id}.mp3"
+        return path if path.is_file() else None
+
     # ------------------------------------------------------------------ #
     # api_audio janitor
     # ------------------------------------------------------------------ #

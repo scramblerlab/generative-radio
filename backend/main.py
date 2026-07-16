@@ -18,7 +18,7 @@ logging.basicConfig(
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from config import OLLAMA_MODEL
 from genres import GENRES, KEYWORDS, LANGUAGES
 from llm import OllamaClient
@@ -215,6 +215,32 @@ async def get_audio(track_id: str):
             "Accept-Ranges": "bytes",
             "Cache-Control": "public, max-age=3600",
         },
+    )
+
+
+@app.get("/api/library/index")
+async def get_library_index():
+    """Full metadata for every track in the persistent library.
+
+    Open access (same policy as /api/audio). ~1-2 MB for a full 500-track
+    library; the mobile offline panel fetches it once and filters locally.
+    """
+    tracks = radio.library.all_meta()
+    return {"enabled": radio.library.enabled, "count": len(tracks), "tracks": tracks}
+
+
+@app.get("/api/library/audio/{track_id}")
+async def get_library_audio(track_id: str):
+    """Serve a library mp3 from disk. track_id must be a known index key
+    (this also makes path traversal impossible)."""
+    path = radio.library.audio_path(track_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Track not found in library")
+    return FileResponse(
+        path,
+        media_type="audio/mpeg",
+        filename=f"{track_id}.mp3",
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 

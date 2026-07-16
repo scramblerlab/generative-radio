@@ -167,6 +167,10 @@ interface Props {
   onChangeGenre?: () => void;
   onClaimDj?: () => void;
   onReact?: (trackId: string, action: 'thumb_up' | 'thumb_down') => void;
+  offlineMode: boolean;
+  offlineTrackCount?: number;
+  onOpenOfflinePanel?: () => void;
+  onExitOffline?: () => void;
 }
 
 export function RadioPlayer({
@@ -175,6 +179,7 @@ export function RadioPlayer({
   djLocked, djUnlockAt, activeDjName, reactionState,
   onTogglePlayPause, onSeekBackward, onSeekForward,
   onChangeGenre, onClaimDj, onReact,
+  offlineMode, offlineTrackCount, onOpenOfflinePanel, onExitOffline,
 }: Props) {
   const insets = useSafeAreaInsets();
   const isPlaying = status === 'playing' && !localPaused;
@@ -239,6 +244,13 @@ export function RadioPlayer({
           {badgeLabel && (
             <View style={styles.badge}>
               <Text style={styles.badgeText}>{badgeLabel}</Text>
+            </View>
+          )}
+
+          {/* Offline mode banner */}
+          {offlineMode && (
+            <View style={[styles.badge, { alignSelf: 'center', marginBottom: 12 }]}>
+              <Text style={styles.badgeText}>OFFLINE MODE · {offlineTrackCount ?? 0} TRACKS</Text>
             </View>
           )}
 
@@ -363,22 +375,39 @@ export function RadioPlayer({
             </View>
           )}
 
-          {/* DJ section — Generate Your Tracks button */}
-          {onClaimDj && (
+          {/* DJ section — Generate Your Tracks button, or offline mode controls */}
+          {offlineMode ? (
             <View style={styles.djSection}>
-              <TouchableOpacity
-                style={[styles.djBtn, effectiveDjLocked && styles.djBtnLocked]}
-                onPress={effectiveDjLocked ? undefined : onClaimDj}
-                disabled={effectiveDjLocked}
-              >
-                <Text style={[styles.djBtnText, effectiveDjLocked && styles.djBtnTextLocked]}>
-                  Generate Your Tracks
-                </Text>
+              <TouchableOpacity style={styles.djBtn} onPress={onExitOffline}>
+                <Text style={styles.djBtnText}>Back to Online Mode</Text>
               </TouchableOpacity>
-              {effectiveDjLocked && djCountdown ? (
-                <Text style={styles.djCountdown}>Unlocks in {djCountdown}</Text>
-              ) : null}
             </View>
+          ) : (
+            <>
+              {onClaimDj && (
+                <View style={styles.djSection}>
+                  <TouchableOpacity
+                    style={[styles.djBtn, effectiveDjLocked && styles.djBtnLocked]}
+                    onPress={effectiveDjLocked ? undefined : onClaimDj}
+                    disabled={effectiveDjLocked}
+                  >
+                    <Text style={[styles.djBtnText, effectiveDjLocked && styles.djBtnTextLocked]}>
+                      Generate Your Tracks
+                    </Text>
+                  </TouchableOpacity>
+                  {effectiveDjLocked && djCountdown ? (
+                    <Text style={styles.djCountdown}>Unlocks in {djCountdown}</Text>
+                  ) : null}
+                </View>
+              )}
+              {onOpenOfflinePanel && (
+                <View style={styles.djSection}>
+                  <TouchableOpacity style={[styles.djBtn, styles.djBtnLocked]} onPress={onOpenOfflinePanel}>
+                    <Text style={[styles.djBtnText, styles.djBtnTextLocked]}>Offline Mode</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </>
           )}
         </View>
 

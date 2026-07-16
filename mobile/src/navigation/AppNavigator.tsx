@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { UseRadioReturn } from '../hooks/useRadio';
 import { RadioPlayer } from '../components/RadioPlayer';
 import { DJPanel } from '../components/DJPanel';
+import { OfflinePanel } from '../components/OfflinePanel';
 import { IPadLayout } from '../components/iPadLayout';
 
 interface Props {
@@ -20,7 +21,10 @@ export function AppNavigator({ radio }: Props) {
     djLocked, djUnlockAt, activeDjName, djPanelOpen, reactionState,
     togglePlayPause, seekBackward, seekForward,
     claimDj, submitDj, closeDjPanel, react,
+    offlineMode, offlineTrackCount, enterOfflineMode, exitOfflineMode,
   } = radio;
+
+  const [offlinePanelOpen, setOfflinePanelOpen] = useState(false);
 
   return (
     <NavigationContainer>
@@ -50,14 +54,23 @@ export function AppNavigator({ radio }: Props) {
             onTogglePlayPause={togglePlayPause}
             onSeekBackward={seekBackward}
             onSeekForward={seekForward}
-            onClaimDj={claimDj}
-            onReact={react}
+            onClaimDj={offlineMode ? undefined : claimDj}
+            onReact={offlineMode ? undefined : react}
+            offlineMode={offlineMode}
+            offlineTrackCount={offlineTrackCount}
+            onOpenOfflinePanel={() => setOfflinePanelOpen(true)}
+            onExitOffline={exitOfflineMode}
           />
         </IPadLayout>
         <DJPanel
           visible={djPanelOpen}
           onSubmit={submitDj}
           onClose={closeDjPanel}
+        />
+        <OfflinePanel
+          visible={offlinePanelOpen}
+          onClose={() => setOfflinePanelOpen(false)}
+          onStartOffline={enterOfflineMode}
         />
       </>
     </NavigationContainer>
