@@ -15,6 +15,9 @@ const PROD_ORIGIN = 'https://radio.scrambler-lab.com';
 const DEV_ORIGIN  = 'http://localhost:5555';
 
 export const BACKEND_URL = __DEV__ ? DEV_ORIGIN  : PROD_ORIGIN;
+// ?client=mobile lets the backend grant DJ mode ("Generate Your Tracks") to this
+// app even when it connects through the public tunnel — the backend can't tell
+// production mobile traffic apart from a random public web visitor by IP alone.
 export const WS_URL      = __DEV__
-  ? 'ws://localhost:5555/ws'
-  : 'wss://radio.scrambler-lab.com/ws';
+  ? 'ws://localhost:5555/ws?client=mobile'
+  : 'wss://radio.scrambler-lab.com/ws?client=mobile';
