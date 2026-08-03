@@ -84,6 +84,7 @@ export interface ListenerCountData {
 
 export interface RoleAssignedData {
   role: ClientRole;
+  djAvailable: boolean; // Generate Your Tracks is restricted to local + mobile clients
 }
 
 export interface TrackReadyData {

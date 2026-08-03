@@ -61,6 +61,7 @@ interface RadioPlayerProps {
   onSeekForward?: () => void;
 onBack: () => void;
   // DJ mode
+  djAvailable: boolean;
   djUnlockAt: number;
   onClaimDj: () => void;
   // Reactions
@@ -96,6 +97,7 @@ export function RadioPlayer({
   onSeekBackward,
   onSeekForward,
   onBack,
+  djAvailable,
   djUnlockAt,
   onClaimDj,
   reactionState,
@@ -335,19 +337,21 @@ const isPlaying = status === 'playing';
           </div>
         )}
 
-        {/* DJ mode — visible to all users */}
-        <div className="player__dj-section">
-          <button
-            className={`player__dj-btn${effectiveDjLocked ? ' player__dj-btn--locked' : ''}`}
-            onClick={onClaimDj}
-            disabled={effectiveDjLocked}
-          >
-            Generate Your Tracks
-          </button>
-          {effectiveDjLocked && djCountdown && (
-            <p className="player__dj-unlock-timer">Unlocks in {djCountdown}</p>
-          )}
-        </div>
+        {/* DJ mode — restricted to local network + mobile app clients */}
+        {djAvailable && (
+          <div className="player__dj-section">
+            <button
+              className={`player__dj-btn${effectiveDjLocked ? ' player__dj-btn--locked' : ''}`}
+              onClick={onClaimDj}
+              disabled={effectiveDjLocked}
+            >
+              Generate Your Tracks
+            </button>
+            {effectiveDjLocked && djCountdown && (
+              <p className="player__dj-unlock-timer">Unlocks in {djCountdown}</p>
+            )}
+          </div>
+        )}
       </div>
 
       <StatusBar status={status} message={statusMessage} nextReady={nextReady} listenerCount={listenerCount} />

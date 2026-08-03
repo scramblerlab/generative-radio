@@ -179,7 +179,15 @@ class RadioOrchestrator:
         self._ws_connections.append(ws)
         ip = _resolve_client_ip(ws)
         is_local = _is_local_ip(ip)
-        self._ws_meta[ws] = {"ip": ip, "connected_at": time.time(), "is_local": is_local}
+        # Mobile app always identifies itself via ?client=mobile — its production
+        # builds connect through the same public tunnel as any web visitor, so IP
+        # alone can't distinguish it. DJ mode is otherwise restricted to local clients.
+        is_mobile = ws.query_params.get("client") == "mobile"
+        dj_available = is_local or is_mobile
+        self._ws_meta[ws] = {
+            "ip": ip, "connected_at": time.time(), "is_local": is_local,
+            "dj_available": dj_available,
+        }
         if self._controller_ws is None and is_local:
             # First local connection (or re-fill after controller left) → controller
             self._controller_ws = ws
@@ -672,13 +680,15 @@ class RadioOrchestrator:
 
     async def _send_controller_snapshot(self, ws: WebSocket) -> None:
         """Unicast role_assigned:controller + current session state to a newly connected controller."""
-        await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "controller"}))
+        dj_available = self._ws_meta.get(ws, {}).get("dj_available", False)
+        await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "controller", "djAvailable": dj_available}))
         await self._send_to(ws, self._make_dj_state_message())
         await self._send_session_snapshot(ws)
 
     async def _send_viewer_snapshot(self, ws: WebSocket) -> None:
         """Unicast role_assigned:viewer + current session state to a newly connected viewer."""
-        await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "viewer"}))
+        dj_available = self._ws_meta.get(ws, {}).get("dj_available", False)
+        await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "viewer", "djAvailable": dj_available}))
         await self._send_to(ws, self._make_dj_state_message())
         await self._send_session_snapshot(ws)
 
@@ -1465,6 +1475,10 @@ class RadioOrchestrator:
 
     async def claim_dj_from_ws(self, ws: WebSocket) -> None:
         """First-click-wins claim. Safe: no await between guard check and mutation."""
+        if not self._ws_meta.get(ws, {}).get("dj_available", False):
+            logger.warning("[radio] dj_claim rejected — client not eligible (remote web viewer)")
+            await self._send_to(ws, WSMessage(event="dj_claim_ack", data={"granted": False}))
+            return
         now = time.time()
         if now < self._dj_lock_until or self._dj_claimant_ws is not None:
             await self._send_to(ws, WSMessage(event="dj_claim_ack", data={"granted": False}))

@@ -42,6 +42,7 @@ export interface UseRadioReturn {
   seekBackward: () => void; // Seek -10s
   seekForward: () => void;  // Seek +10s
   // DJ mode
+  djAvailable: boolean;     // Whether this client is allowed to claim DJ at all (local or mobile)
   djLocked: boolean;
   djUnlockAt: number;       // Unix timestamp (seconds) when DJ button becomes available
   activeDjName: string;     // Name of the current DJ (empty if none)
@@ -77,6 +78,7 @@ export function useRadio(): UseRadioReturn {
   const activityIdRef = useRef(0);
 
   // DJ mode state
+  const [djAvailable, setDjAvailable] = useState(false);
   const [djLocked, setDjLocked] = useState(true);
   const [djUnlockAt, setDjUnlockAt] = useState(0);
   const [activeDjName, setActiveDjName] = useState('');
@@ -331,10 +333,11 @@ export function useRadio(): UseRadioReturn {
       console.log('[WS] Received event:', msg.event, msg.data);
 
       if (msg.event === 'role_assigned') {
-        const { role: assignedRole } = msg.data as unknown as RoleAssignedData;
+        const { role: assignedRole, djAvailable: assignedDjAvailable } = msg.data as unknown as RoleAssignedData;
         console.log('[Radio] Role assigned:', assignedRole);
         roleRef.current = assignedRole;
         setRole(assignedRole);
+        setDjAvailable(assignedDjAvailable);
       } else if (msg.event === 'track_ready') {
         const { track, isNext } = msg.data as unknown as TrackReadyData;
 
@@ -708,6 +711,7 @@ export function useRadio(): UseRadioReturn {
     togglePlayPause,
     seekBackward,
     seekForward,
+    djAvailable,
     djLocked,
     djUnlockAt,
     activeDjName,

@@ -86,6 +86,7 @@ export default function App() {
             onSeekBackward={radio.seekBackward}
             onSeekForward={radio.seekForward}
             onBack={handleBack}
+            djAvailable={radio.djAvailable}
             djUnlockAt={radio.djUnlockAt}
             onClaimDj={radio.claimDj}
             reactionState={radio.reactionState}
@@ -113,6 +114,7 @@ export default function App() {
               onSeekBackward={radio.seekBackward}
               onSeekForward={radio.seekForward}
 onBack={handleBack}
+              djAvailable={radio.djAvailable}
               djUnlockAt={radio.djUnlockAt}
                 onClaimDj={radio.claimDj}
               reactionState={radio.reactionState}

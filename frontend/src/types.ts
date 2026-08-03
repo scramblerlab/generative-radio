@@ -85,6 +85,7 @@ export interface ListenerCountData {
 
 export interface RoleAssignedData {
   role: ClientRole;
+  djAvailable: boolean; // Generate Your Tracks is restricted to local + mobile clients
 }
 
 // Payload shapes for each event
