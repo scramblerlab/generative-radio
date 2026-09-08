@@ -69,6 +69,10 @@ const backendProxy = {
 
 export default defineConfig({
   plugins: [react(), cacheControlPlugin()],
+  // @radio/shared is a workspace package that ships raw TypeScript with no build
+  // step. Excluding it from dep pre-bundling makes Vite compile it as source
+  // (like any file under src/) instead of handing it to esbuild as a dependency.
+  optimizeDeps: { exclude: ['@radio/shared'] },
   server: {
     port: 5173,
     allowedHosts: true, // allow tunnel hosts (cloudflare, ngrok, etc.)

@@ -18,7 +18,7 @@ import {
   DjClaimAckData,
   ReactionState,
   ReactionUpdateData,
-} from '../types';
+} from '@radio/shared';
 
 export interface UseRadioReturn {
   role: ClientRole | null;

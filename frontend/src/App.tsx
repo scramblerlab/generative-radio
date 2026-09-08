@@ -3,7 +3,7 @@ import { GenreSelector } from './components/GenreSelector';
 import { RadioPlayer } from './components/RadioPlayer';
 import { DJPanel } from './components/DJPanel';
 import { useRadio } from './hooks/useRadio';
-import { SessionInfo, AdvancedOptions } from './types';
+import { SessionInfo, AdvancedOptions } from '@radio/shared';
 import './App.css';
 
 type View = 'selector' | 'player';

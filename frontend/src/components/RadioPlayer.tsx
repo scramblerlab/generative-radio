@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Track, RadioStatus, ActivityEntry, ViewerInfo, SessionInfo, ReactionState } from '../types';
+import { Track, RadioStatus, ActivityEntry, ViewerInfo, SessionInfo, ReactionState } from '@radio/shared';
 import { StatusBar } from './StatusBar';
 
 
