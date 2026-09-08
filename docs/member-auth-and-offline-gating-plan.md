@@ -756,6 +756,21 @@ Web を `@radio/shared` に接続。`replay?: boolean` を共通 `Track` に移�
 
 `release()` の調査、`?token=` を置き換える接続後 auth フレーム、library-audio のユーザー単位レート制限、`backend/scripts/create_user.py` CLI。
 
+**追加（2026-09-08 に実際に発生した障害）— `uv run --frozen` で外部障害に耐えるようにする**
+
+`scripts/start_prod.sh:99` は ACE-Step を `uv run acestep-api` で起動している。`uv run` は起動のたびにロックファイルを検証し、**直接 URL で指定された依存はメタデータを取得しにいく**。ACE-Step の `uv.lock` には Windows 専用の `flash-attn` wheel が直接 URL で入っており（`sys_platform == 'win32'` マーカー付きなので macOS では決してインストールされない）、その GitHub Releases URL が一時的に 500 を返した結果、**ロック検証ごと失敗して ACE-Step が起動できず、ラジオ全体が上がらなかった**。
+
+```
+error: Failed to generate package metadata for `flash-attn==2.8.2 @ direct+https://github.com/sdbds/...win_amd64.whl`
+  Caused by: HTTP status server error (500 Internal Server Error)
+```
+
+つまり **Mac で動かしているのに、Windows 用 wheel をホストする外部サーバが単一障害点になっている**。
+
+修正案: `uv run` → `uv run --frozen`（`scripts/start.sh` と `scripts/start_prod.sh` の両方）。ロック検証をスキップして既存の `.venv` をそのまま使うため、この経路の外部障害に耐えられる。`.venv` の更新は `scripts/setup.sh` の `uv sync` が担っている（既にそうなっている）ので、責務の分離としても素直。
+
+トレードオフ: ACE-Step 側で依存が変わっても起動時に自動追従しなくなり、`setup.sh` を回すまで気づかない。実運用では `setup.sh` 経由で更新しているため実害は小さい。
+
 ---
 
 ### 順序制約のまとめ
