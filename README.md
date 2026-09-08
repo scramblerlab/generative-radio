@@ -104,6 +104,46 @@ The controller can configure ACE-Step parameters before starting:
 
 See the [ACE-Step 1.5 Tutorial](https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/Tutorial.md) for details on what each parameter does.
 
+## Accounts
+
+Signup is **invite-only**. `scripts/setup.sh` writes `~/.generative-radio.env` (chmod 600) with a generated `JWT_SECRET` and an invite code, and prints the code at the end. Share the code with anyone you want to let register; change it any time by editing that file and restarting the backend.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JWT_SECRET` | — (required) | Signs session tokens. Generate with `openssl rand -hex 32`. |
+| `INVITE_CODE` | — (required) | Gates `POST /api/auth/signup`. |
+| `JWT_EXPIRE_DAYS` | `30` | Session lifetime. |
+| `COOKIE_SECURE` | `1` | `start.sh` sets `0` — Safari refuses Secure cookies over `http://localhost`. |
+| `USERS_DB_PATH` | `backend/users.db` | SQLite user store. Gitignored; **back this up**. |
+
+If either required variable is missing the radio still runs normally — only `/api/auth/*` returns `503` and nobody can log in. The startup banner says which variable is missing.
+
+| Method | Endpoint | Auth | Notes |
+|---|---|---|---|
+| POST | `/api/auth/signup` | — | `{email, password, nickname, inviteCode}`. Nickname is the DJ name; unique case-insensitively. |
+| POST | `/api/auth/login` | — | `{email, password}` |
+| POST | `/api/auth/logout` | — | Clears the cookie |
+| POST | `/api/auth/verify` | cookie or bearer | Session restore |
+
+Two transports share one identity: the web app is same-origin with the API, so it uses an httpOnly cookie it can never read from JavaScript; the mobile app sends `Authorization: Bearer` and opts into a token in the response body with `X-Auth-Transport: bearer`.
+
+Creating the first account:
+
+```bash
+INVITE=$(grep '^INVITE_CODE=' ~/.generative-radio.env | cut -d= -f2-)
+curl -s http://localhost:5555/api/auth/signup -H 'Content-Type: application/json' \
+  -d "{\"email\":\"you@example.com\",\"password\":\"a-long-password\",\"nickname\":\"YourDJName\",\"inviteCode\":\"$INVITE\"}"
+```
+
+## Tests
+
+Password hashing and session tokens are the only parts of this project with automated tests — a silent bug in either is invisible to manual testing and catastrophic in production. Everything else (LLM → ACE-Step → audio) is verified by hand.
+
+```bash
+backend/.venv/bin/pip install -r backend/requirements-dev.txt   # once
+cd backend && .venv/bin/python -m pytest tests -q
+```
+
 ## Remote access
 
 `start.sh` supports two tunnel modes:

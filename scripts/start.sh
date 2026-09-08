@@ -18,6 +18,11 @@ echo ""
 export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
 export PYTORCH_ENABLE_MPS_FALLBACK=1
 
+# Dev serves the web app over plain http://localhost:5173. Safari refuses to
+# store a Secure cookie on http, so the session cookie is issued without the
+# Secure flag here. start_prod.sh leaves this at the default (1).
+export COOKIE_SECURE=0
+
 # Ensure uv (installed to ~/.local/bin by astral.sh installer) is on PATH
 export PATH="$HOME/.local/bin:$PATH"
 
