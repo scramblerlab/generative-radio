@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { GenreSelector } from './components/GenreSelector';
 import { RadioPlayer } from './components/RadioPlayer';
 import { DJPanel } from './components/DJPanel';
+import { AuthModal } from './components/AuthModal';
+import { useAuth } from './context/AuthContext';
 import { useRadio } from './hooks/useRadio';
 import { SessionInfo, AdvancedOptions } from '@radio/shared';
 import './App.css';
@@ -11,7 +13,9 @@ type View = 'selector' | 'player';
 export default function App() {
   const [view, setView] = useState<View>('player');
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
-  const radio = useRadio();
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const { user, isLoading: authLoading, authVersion, logout } = useAuth();
+  const radio = useRadio(authVersion);
 
   const handleStart = async (
     genres: string[], keywords: string[], language: string,
@@ -60,6 +64,23 @@ export default function App() {
       {/* DJ panel modal — rendered above everything, visible to whichever client claimed the slot */}
       {radio.djPanelOpen && (
         <DJPanel onSubmit={radio.submitDj} onClose={radio.closeDjPanel} />
+      )}
+
+      {authModalOpen && <AuthModal onClose={() => setAuthModalOpen(false)} />}
+
+      {/* Hidden until the session-restore call resolves, so a signed-in user
+          never sees a "Sign in" button flash on load. */}
+      {!authLoading && (
+        <div className="auth-bar">
+          {user ? (
+            <>
+              <span className="auth-bar__nickname">{user.nickname}</span>
+              <button className="auth-bar__btn" onClick={logout}>Sign out</button>
+            </>
+          ) : (
+            <button className="auth-bar__btn" onClick={() => setAuthModalOpen(true)}>Sign in</button>
+          )}
+        </div>
       )}
 
       <main className="app">

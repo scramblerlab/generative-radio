@@ -59,7 +59,17 @@ const WS_URL = '/ws';
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 16_000;
 
-export function useRadio(): UseRadioReturn {
+/**
+ * @param authVersion Bumped by AuthContext on every sign-in and sign-out. The
+ *   WebSocket is authenticated by the browser's httpOnly cookie on the upgrade
+ *   request, not by anything this hook holds, so the only way the server learns
+ *   about an identity change is a fresh connection. Without this the DJ button
+ *   would not appear until the page was reloaded.
+ *
+ *   Session *restore* on page load needs no reconnect: the cookie is already on
+ *   the upgrade request before React has finished verifying it.
+ */
+export function useRadio(authVersion: number = 0): UseRadioReturn {
   const [role, setRole] = useState<ClientRole | null>(null);
   const [status, setStatus] = useState<RadioStatus>('idle');
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
@@ -351,14 +361,17 @@ export function useRadio(): UseRadioReturn {
           setStatus('playing');
 
           // On WS reconnect the server snapshot re-sends the current track as isNext=false.
-          // If we're already playing that exact track with no error, don't restart —
+          // If we already hold that exact track with no error, don't restart —
           // it would pause the audio, revoke the blob URL, and re-fetch unnecessarily.
+          // `localPaused` counts as "already have it": the user paused on purpose,
+          // and signing in reconnects the socket, so without this a paused listener
+          // would have their track yanked back to 0:00 on login.
           const audioEl = audioRef.current;
           const alreadyPlaying =
             currentTrackRef.current?.id === track.id &&
             audioEl != null &&
             !audioEl.error &&
-            !audioEl.paused;
+            (!audioEl.paused || localPausedRef.current);
           if (alreadyPlaying) {
             console.log('[Radio] track_ready (current) — same track already playing, skipping restart');
           } else {
@@ -464,17 +477,20 @@ export function useRadio(): UseRadioReturn {
     };
   }, [stopNextTrackPoll, playTrack]);
 
-  // Mount: start WS; unmount: tear down
+  // Mount: start WS; unmount: tear down. Also re-runs when authVersion changes,
+  // which reconnects so the backend re-reads identity from the cookie.
   useEffect(() => {
     isActiveRef.current = true;
     connectWebSocket();
     return () => {
-      console.log('[WS] Cleaning up WebSocket on unmount');
+      console.log('[WS] Tearing down WebSocket (unmount or auth change)');
+      // Cleared before close() so the onclose handler does not schedule a
+      // reconnect that would race the one this effect is about to make.
       isActiveRef.current = false;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };
-  }, [connectWebSocket]);
+  }, [connectWebSocket, authVersion]);
 
   // Attach audio element ended handler every render (audioRef might change)
   useEffect(() => {

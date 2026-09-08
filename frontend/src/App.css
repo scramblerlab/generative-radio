@@ -1260,3 +1260,90 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
   color: var(--red);
   margin-top: -8px;
 }
+
+/* ============================================================
+   Auth — top-right status bar and the sign-in modal
+   ============================================================ */
+.auth-bar {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.auth-bar__nickname {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* Deliberately quieter than .player__dj-btn — signing in is a means, not the
+   thing the page is for. */
+.auth-bar__btn {
+  padding: 6px 16px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  border: 1.5px solid var(--border-2);
+  border-radius: var(--radius-pill);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.auth-bar__btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.auth-panel {
+  max-width: 420px;
+  gap: 24px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-field__label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* .feeling-input reserves right padding for a character counter; these fields
+   have none, so reclaim it. */
+.auth-input {
+  padding-right: 14px;
+  font-size: 14px;
+}
+
+.auth-error {
+  font-size: 12px;
+  color: var(--red);
+  text-align: center;
+}
+
+@media (max-width: 480px) {
+  .auth-bar {
+    top: 10px;
+    right: 10px;
+    gap: 8px;
+  }
+}
