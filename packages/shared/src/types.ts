@@ -19,9 +19,10 @@ export interface Track {
   keyScale: string;
   duration: number;
   audioUrl: string;
-  djName: string;       // DJ who generated this track (empty if no DJ session)
+  djName: string;     // DJ who generated this track (empty if no DJ session)
   djKeywords: string[]; // Keywords chosen by the DJ for this track
   djLanguage: string;   // Language chosen by the DJ for this track
+  replay?: boolean;     // True when served from the library while a fresh track generates
 }
 
 export interface Genre {
@@ -47,11 +48,11 @@ export interface SessionInfo {
 export interface AdvancedOptions {
   timeSignature?: string;    // "2", "3", "4", "6", or undefined (auto)
   inferenceSteps: number;    // 4–100, default 8
-  model: string;             // "turbo", "turbo-shift1", "turbo-shift3", "turbo-continuous"
-  thinking: boolean;         // default true
+  model: string;             // "xl-turbo", "turbo", "turbo-shift1", "turbo-shift3", "turbo-continuous"
+  thinking: boolean;         // default true — semantic audio code generation
   useCotCaption: boolean;    // default true
   useCotMetas: boolean;      // default true
-  useCotLanguage: boolean;   // default true
+  useCotLanguage: boolean;   // default true — LM reads lyrics to detect language AND instrumental intent
   djLockSeconds: number;     // DJ cooldown duration in seconds, default 180
 }
 
@@ -87,6 +88,7 @@ export interface RoleAssignedData {
   djAvailable: boolean; // Generate Your Tracks is restricted to local + mobile clients
 }
 
+// Payload shapes for each event
 export interface TrackReadyData {
   track: Track;
   isNext: boolean;

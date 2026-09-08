@@ -1,4 +1,4 @@
-import { RadioStatus } from '../types';
+import { RadioStatus } from '@radio/shared';
 
 interface StatusBarProps {
   status: RadioStatus;

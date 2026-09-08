@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Genre, Keyword, Language, AdvancedOptions, Track } from '../types';
+import { Genre, Keyword, Language, AdvancedOptions, Track } from '@radio/shared';
 
 const MOOD_CATEGORY_LABELS: Record<string, string> = {
   emotion:    'Emotion',
