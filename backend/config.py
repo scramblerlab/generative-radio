@@ -1,10 +1,19 @@
 import os
 import subprocess
 import logging
+from pathlib import Path
 
 import psutil
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+# Load secrets before anything else reads os.environ. config.py is imported by
+# main.py, models.py and radio.py, so this is guaranteed to run first.
+# ~/.generative-radio.env holds JWT_SECRET and INVITE_CODE (created by
+# scripts/setup.sh, chmod 600); the repo-local .env is an optional dev override.
+load_dotenv(Path.home() / ".generative-radio.env")
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 # LLM models — 4b is default; 0.8b is used on memory-constrained machines.
 OLLAMA_MODEL_NAME = "qwen3.5:4b"

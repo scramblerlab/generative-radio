@@ -18,6 +18,16 @@ frontend/dist/
 .cursor/
 *.swp
 
+# User accounts database (created at runtime by backend/users.py).
+# The only stateful file in the repo besides the library volume — back it up.
+backend/users.db
+backend/users.db-wal
+backend/users.db-shm
+
+# Local secrets override (JWT_SECRET / INVITE_CODE normally live in
+# ~/.generative-radio.env, outside the repo)
+.env
+
 # Saved tracks
 saved_tracks/
 

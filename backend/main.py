@@ -23,7 +23,11 @@ from config import OLLAMA_MODEL
 from genres import GENRES, KEYWORDS, LANGUAGES
 from llm import OllamaClient
 from acestep_client import ACEStepClient
-from radio import RadioOrchestrator, _is_local_ip, _normalize_ip
+from radio import RadioOrchestrator
+from netutil import is_local_ip as _is_local_ip, resolve_request_ip as _resolve_request_ip
+import auth as auth_module
+import users
+from routers.auth import router as auth_router
 from models import ReactRequest
 from warmup import run_warmup
 
@@ -49,6 +53,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"  LLM model : {OLLAMA_MODEL}")
     logger.info(f"  ACE-Step  : {acestep.base_url}")
     logger.info(f"  Library   : {radio.library.dir if radio.library.enabled else 'disabled'} ({len(radio.library)} tracks)")
+    users.init_db()
+    logger.info(f"  Auth      : {auth_module.config_status()}")
+    logger.info(f"  Users     : {users.count_users()} registered")
+    if not auth_module.is_configured():
+        logger.critical(
+            "[main] Auth is not configured — the radio still plays, but nobody can "
+            "sign up or log in. Run ./scripts/setup.sh to generate "
+            "~/.generative-radio.env, then restart."
+        )
     logger.info("=" * 60)
 
     radio.library.start_janitor()
@@ -99,6 +112,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+# The project's only APIRouter — see backend/routers/auth.py for why.
+app.include_router(auth_router)
 
 # In dev mode (ALLOW_QUICK_TUNNEL=1) also accept Cloudflare quick-tunnel origins.
 # Never set this in production — start_prod.sh intentionally omits it.
@@ -157,19 +173,6 @@ async def get_status():
         "model": OLLAMA_MODEL,
         "listenerCount": len(radio._ws_connections),
     }
-
-
-def _resolve_request_ip(request: Request) -> str:
-    """Resolve the real client IP from an HTTP request, honoring Cloudflare headers."""
-    cf_ip = request.headers.get("cf-connecting-ip", "").strip()
-    if cf_ip:
-        return _normalize_ip(cf_ip)
-    forwarded = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return _normalize_ip(first)
-    return _normalize_ip(request.client.host) if request.client else "unknown"
 
 
 def _iter_audio(data: bytes, chunk_size: int = 65_536):

@@ -1,7 +1,6 @@
 import asyncio
 import collections
 import contextlib
-import ipaddress
 import json
 import logging
 import os
@@ -19,57 +18,12 @@ from acestep_client import ACEStepClient
 from config import mem_snapshot, get_progressive_duration
 from genres import GENRES, KEYWORDS
 from library import TrackLibrary
+from netutil import (
+    is_local_ip as _is_local_ip,
+    resolve_client_ip as _resolve_client_ip,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_ip(raw: str) -> str:
-    """Convert IPv6-mapped IPv4 addresses to plain IPv4 strings.
-
-    FastAPI/uvicorn may report:
-      ::1               → 127.0.0.1   (IPv6 loopback)
-      ::ffff:192.168.x.y → 192.168.x.y (IPv6-mapped IPv4)
-    All other values are returned unchanged.
-    """
-    if raw == "::1":
-        return "127.0.0.1"
-    if raw.startswith("::ffff:"):
-        candidate = raw[7:]
-        # Accept only if it looks like a dotted-quad IPv4
-        parts = candidate.split(".")
-        if len(parts) == 4 and all(p.isdigit() for p in parts):
-            return candidate
-    return raw
-
-
-def _is_local_ip(ip: str) -> bool:
-    """Return True if the IP is a loopback or private (RFC 1918 / ULA) address."""
-    try:
-        addr = ipaddress.ip_address(ip)
-        return addr.is_loopback or addr.is_private
-    except ValueError:
-        return False
-
-
-def _resolve_client_ip(ws: WebSocket) -> str:
-    """Determine the real client IP, checking proxy/CDN headers first.
-
-    When served behind Cloudflare Tunnel, ws.client.host is always 127.0.0.1
-    (the local cloudflared process).  Cloudflare injects CF-Connecting-IP with
-    the actual visitor's IP, allowing us to distinguish local vs remote clients.
-    """
-    # Cloudflare: real visitor IP
-    cf_ip = ws.headers.get("cf-connecting-ip", "").strip()
-    if cf_ip:
-        return _normalize_ip(cf_ip)
-    # Standard reverse-proxy header: first entry is the originating client
-    forwarded = ws.headers.get("x-forwarded-for", "").strip()
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return _normalize_ip(first)
-    # Direct connection
-    return _normalize_ip(ws.client.host) if ws.client else "unknown"
 
 
 # Mapping from frontend merged category name → backend KEYWORDS category values
