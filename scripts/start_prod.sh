@@ -96,7 +96,12 @@ else
   TOKENIZERS_PARALLELISM=false \
   TQDM_DISABLE=1 \
   ACESTEP_DISABLE_TQDM=1 \
-    uv run acestep-api --host 127.0.0.1 --port 8001 \
+    # --frozen: `uv run` otherwise re-validates the lockfile on every start,
+    # which fetches metadata for ACE-Step's direct-URL deps — including a
+    # Windows-only flash-attn wheel that is never installed on macOS. When
+    # that GitHub URL returned 500 on 2026-09-08, the radio would not start.
+    # Dependency updates are scripts/setup.sh's job (`uv sync`), not start-up's.
+    uv run --frozen acestep-api --host 127.0.0.1 --port 8001 \
     < /dev/null > /tmp/generative-radio-acestep.log 2>&1 &
   ACESTEP_PID=$!
   cd "$PROJECT_DIR"
@@ -143,10 +148,14 @@ VENV="$PROJECT_DIR/backend/.venv"
 ensure_backend_venv "$PROJECT_DIR"
 
 cd "$PROJECT_DIR/backend"
+# --no-access-log: the mobile app authenticates its WebSocket with ?token=,
+# because React Native cannot attach the cookie a browser sends on the
+# upgrade. That would put session tokens in every access-log line.
 "$VENV/bin/uvicorn" main:app \
   --host 127.0.0.1 \
   --port 5555 \
   --log-level info \
+  --no-access-log \
   > /tmp/generative-radio-backend.log 2>&1 &
 BACKEND_PID=$!
 cd "$PROJECT_DIR"

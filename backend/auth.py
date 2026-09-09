@@ -74,6 +74,16 @@ def cookie_secure() -> bool:
     return os.getenv("COOKIE_SECURE", "1") != "0"
 
 
+def auth_enforced() -> bool:
+    """Whether the DJ and library gates are active.
+
+    AUTH_ENFORCE=0 turns them off so a bad rollout can be undone with a restart
+    instead of a redeploy. It does not disable login itself — accounts keep
+    working, the gates simply let everyone through. Not a supported mode to run in.
+    """
+    return os.getenv("AUTH_ENFORCE", "1") != "0"
+
+
 def is_configured() -> bool:
     return bool(jwt_secret()) and bool(invite_code())
 
@@ -81,7 +91,9 @@ def is_configured() -> bool:
 def config_status() -> str:
     """One-line summary for the startup banner."""
     if is_configured():
-        return f"configured (tokens valid {expire_days()}d, secure cookies {'on' if cookie_secure() else 'OFF (dev)'})"
+        gate = "gates ON" if auth_enforced() else "gates OFF (AUTH_ENFORCE=0)"
+        return (f"configured (tokens valid {expire_days()}d, "
+                f"secure cookies {'on' if cookie_secure() else 'OFF (dev)'}, {gate})")
     missing = [n for n, v in (("JWT_SECRET", jwt_secret()), ("INVITE_CODE", invite_code())) if not v]
     return f"NOT CONFIGURED — missing {', '.join(missing)} (login and signup will return 503)"
 

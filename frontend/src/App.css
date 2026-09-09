@@ -1255,10 +1255,14 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 
 .feeling-input--error { border-color: var(--red); }
 
-.dj-panel__name-error {
-  font-size: 12px;
-  color: var(--red);
-  margin-top: -8px;
+.dj-panel__identity {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.dj-panel__identity strong {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 /* ============================================================

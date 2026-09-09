@@ -32,7 +32,14 @@ def normalize_ip(raw: str) -> str:
 
 
 def is_local_ip(ip: str) -> bool:
-    """Return True if the IP is a loopback or private (RFC 1918 / ULA) address."""
+    """Return True if the IP is a loopback or private (RFC 1918 / ULA) address.
+
+    Note for anyone writing tests against this: Python's `is_private` also covers
+    the RFC 5737 documentation ranges (192.0.2.0/24, 198.51.100.0/24,
+    203.0.113.0/24), so those read as "local" here. Harmless in production — they
+    never arrive as real client IPs — but use something like 8.8.8.8 when you
+    want a fixture that is genuinely remote.
+    """
     try:
         addr = ipaddress.ip_address(ip)
         return addr.is_loopback or addr.is_private

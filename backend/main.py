@@ -15,10 +15,10 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, Response
 from config import OLLAMA_MODEL
 from genres import GENRES, KEYWORDS, LANGUAGES
 from llm import OllamaClient
@@ -26,7 +26,9 @@ from acestep_client import ACEStepClient
 from radio import RadioOrchestrator
 from netutil import is_local_ip as _is_local_ip, resolve_request_ip as _resolve_request_ip
 import auth as auth_module
+import ratelimit
 import users
+from auth import AuthUser, get_current_user
 from routers.auth import router as auth_router
 from models import ReactRequest
 from warmup import run_warmup
@@ -175,6 +177,19 @@ async def get_status():
     }
 
 
+async def _require_member(request: Request) -> AuthUser:
+    """Signed-in callers only, unless AUTH_ENFORCE=0 (the rollback switch).
+
+    When the gate is off, an anonymous caller is given a placeholder identity so
+    downstream code — logging, per-user rate limiting — has something to key on
+    without every call site growing a None branch.
+    """
+    if not auth_module.auth_enforced():
+        user = await auth_module.get_optional_user(request)
+        return user or AuthUser(id="anonymous", email="", nickname="")
+    return await get_current_user(request)
+
+
 def _iter_audio(data: bytes, chunk_size: int = 65_536):
     """Yield audio bytes in chunks so the browser can start decoding immediately."""
     for i in range(0, len(data), chunk_size):
@@ -222,28 +237,40 @@ async def get_audio(track_id: str):
 
 
 @app.get("/api/library/index")
-async def get_library_index():
+async def get_library_index(request: Request, user: AuthUser = Depends(_require_member)):
     """Full metadata for every track in the persistent library.
 
-    Open access (same policy as /api/audio). ~1-2 MB for a full 500-track
-    library; the mobile offline panel fetches it once and filters locally.
+    Members only. This exposes the prompt, tags, seed, lyrics and DJ name of
+    every track ever generated, and is the index a client walks to bulk-download
+    the whole library — it was open to anyone who knew the public URL.
+
+    ~1-2 MB for a full 500-track library. The payload is served from a cached
+    encoding behind an ETag, so repeat opens of the offline panel cost a hash
+    comparison rather than re-serializing 500 dicts on the event loop.
     """
-    tracks = radio.library.all_meta()
-    return {"enabled": radio.library.enabled, "count": len(tracks), "tracks": tracks}
+    payload, etag = radio.library.index_payload()
+    headers = {"ETag": etag, "Cache-Control": "private, max-age=60"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=payload, media_type="application/json", headers=headers)
 
 
 @app.get("/api/library/audio/{track_id}")
-async def get_library_audio(track_id: str):
+async def get_library_audio(request: Request, track_id: str, user: AuthUser = Depends(_require_member)):
     """Serve a library mp3 from disk. track_id must be a known index key
     (this also makes path traversal impossible)."""
+    # One offline download is up to 500 of these, so the ceiling is well above a
+    # full run while still capping a scraper.
+    ratelimit.check("library-audio", user.id, limit=700, window_s=600)
     path = radio.library.audio_path(track_id)
     if path is None:
         raise HTTPException(status_code=404, detail="Track not found in library")
+    logger.debug(f"[main] Library audio {track_id} → user {user.id}")
     return FileResponse(
         path,
         media_type="audio/mpeg",
         filename=f"{track_id}.mp3",
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": "private, max-age=86400"},
     )
 
 
@@ -382,7 +409,22 @@ async def get_track_reactions(track_id: str, request: Request):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info(f"[main] WebSocket accepted from {websocket.client}")
-    radio.add_ws(websocket)
+
+    # Browsers send the httpOnly cookie on a same-origin upgrade automatically;
+    # React Native cannot, so mobile appends ?token=. An invalid or expired
+    # token does NOT close the socket — the radio is public and only DJ mode is
+    # gated, so a bad token simply degrades to an anonymous listener. The client
+    # learns this from role_assigned.djAvailable rather than a dropped
+    # connection mid-song.
+    token = auth_module.extract_token_ws(websocket)
+    user: AuthUser | None = None
+    if token:
+        try:
+            user = auth_module.verify_token(token)
+        except HTTPException:
+            logger.info("[main] WS token rejected — connecting as anonymous listener")
+            token = None
+    radio.add_ws(websocket, user=user, token=token)
     try:
         while True:
             data = await websocket.receive_json()
@@ -424,13 +466,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 await radio.cancel_dj_claim_from_ws(websocket)
             elif event == "dj_submit":
                 event_data = data.get("data", {})
+                # djName is deliberately NOT read: the DJ name comes from the
+                # authenticated session. Older clients still send it; ignoring it
+                # keeps them working and makes the field unspoofable.
                 await radio.submit_dj_from_ws(
                     websocket,
                     genres=event_data.get("genres", []),
                     keywords=event_data.get("keywords", []),
                     language=event_data.get("language", "en"),
                     feeling=event_data.get("feeling", ""),
-                    dj_name=event_data.get("djName", ""),
                 )
             else:
                 logger.warning(f"[main] Unknown WS event from client: {event}")
