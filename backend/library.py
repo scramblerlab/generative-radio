@@ -20,6 +20,7 @@ behaves exactly as before.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -65,6 +66,9 @@ class TrackLibrary:
         self.max_tracks = max_tracks
         self.enabled = False
         self._index: dict[str, dict] = {}  # track_id → sidecar metadata
+        # Bumped on every _index mutation; index_payload() caches against it.
+        self._index_version: int = 0
+        self._payload_cache: tuple[int, bytes, str] | None = None
         self._recent_picks: deque[str] = deque(maxlen=_RECENT_PICKS_N)
         self._janitor_task: asyncio.Task | None = None
 
@@ -90,6 +94,7 @@ class TrackLibrary:
             return
 
         self._load_index()
+        self._index_version += 1
         logger.info(
             f"[library] Initialized — {len(self._index)} tracks in {self.dir} "
             f"(cap: {self.max_tracks})"
@@ -178,6 +183,7 @@ class TrackLibrary:
         sidecar.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
         self._index[track_id] = meta
+        self._index_version += 1
         logger.info(
             f"[library] Adopted '{meta.get('songTitle', '?')}' "
             f"({track_id}) — {len(self._index)} tracks"
@@ -191,6 +197,7 @@ class TrackLibrary:
                 self._index, key=lambda tid: self._index[tid].get("createdAt", "")
             )
             self._index.pop(oldest_id, None)
+            self._index_version += 1
             for suffix in (".mp3", ".json"):
                 path = self.dir / f"{oldest_id}{suffix}"
                 try:
@@ -237,6 +244,7 @@ class TrackLibrary:
         except OSError as e:
             logger.warning(f"[library] Could not read {path.name}: {e}")
             self._index.pop(track_id, None)
+            self._index_version += 1
             return None
 
     def all_meta(self) -> list[dict]:
@@ -249,8 +257,25 @@ class TrackLibrary:
             reverse=True,
         )
 
-    def get_meta(self, track_id: str) -> dict | None:
-        return self._index.get(track_id) if self.enabled else None
+    def index_payload(self) -> tuple[bytes, str]:
+        """The /api/library/index body and its ETag, encoded at most once per change.
+
+        A full library is ~1-2 MB of JSON (every track carries its lyrics, which
+        the mobile client needs offline). The offline panel refetches it on every
+        open, so without this the event loop re-sorted and re-serialized 500
+        dicts each time, while also feeding audio to every listener.
+        """
+        cached = self._payload_cache
+        if cached is not None and cached[0] == self._index_version:
+            return cached[1], cached[2]
+        tracks = self.all_meta()
+        body = json.dumps(
+            {"enabled": self.enabled, "count": len(tracks), "tracks": tracks},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        etag = f'"{hashlib.sha256(body).hexdigest()[:32]}"'
+        self._payload_cache = (self._index_version, body, etag)
+        return body, etag
 
     def audio_path(self, track_id: str) -> Path | None:
         """Absolute path to the mp3, only for track_ids present in the index."""

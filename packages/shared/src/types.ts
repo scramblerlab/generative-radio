@@ -85,7 +85,8 @@ export interface ListenerCountData {
 
 export interface RoleAssignedData {
   role: ClientRole;
-  djAvailable: boolean; // Generate Your Tracks is restricted to local + mobile clients
+  djAvailable: boolean; // true iff this connection is signed in — DJ mode is members-only
+  nickname?: string;    // the signed-in user's nickname; '' when anonymous
 }
 
 // Payload shapes for each event
@@ -127,6 +128,7 @@ export interface ProgressData {
 export interface ViewerInfo {
   ip: string;
   connectedAt: number; // Unix timestamp (seconds)
+  nickname?: string;   // '' for anonymous listeners
 }
 
 export interface ViewerListData {
@@ -141,4 +143,7 @@ export interface DjStateData {
 
 export interface DjClaimAckData {
   granted: boolean;
+  /** Why a claim was refused. Lets the client open the login modal for
+   *  auth_required instead of failing silently the way "locked" should. */
+  reason?: 'auth_required' | 'locked' | 'session_expired';
 }

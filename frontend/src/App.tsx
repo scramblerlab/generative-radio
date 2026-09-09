@@ -37,6 +37,12 @@ export default function App() {
     setView('selector');
   };
 
+  // A DJ claim refused for an auth reason means the remedy is signing in, so
+  // open that modal rather than leaving the button looking broken.
+  useEffect(() => {
+    if (radio.djClaimRefusal) setAuthModalOpen(true);
+  }, [radio.djClaimRefusal]);
+
   // Keep sessionInfo.genre in sync with the actual genre used for each track.
   // This is essential in Random mode where the genre changes per-track.
   useEffect(() => {
@@ -63,7 +69,7 @@ export default function App() {
 
       {/* DJ panel modal — rendered above everything, visible to whichever client claimed the slot */}
       {radio.djPanelOpen && (
-        <DJPanel onSubmit={radio.submitDj} onClose={radio.closeDjPanel} />
+        <DJPanel nickname={radio.djNickname} onSubmit={radio.submitDj} onClose={radio.closeDjPanel} />
       )}
 
       {authModalOpen && <AuthModal onClose={() => setAuthModalOpen(false)} />}

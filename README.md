@@ -67,12 +67,15 @@ If the controller disconnects, the next **local** viewer is automatically promot
 
 ## "Everyone can be a DJ" mode
 
-Viewers can request the DJ slot via the **Be the DJ** button. When granted:
+**Signed-in members only** — see [Accounts](#accounts). The button is hidden for anonymous listeners, on the local network as well as remotely. Controller powers (start/stop/skip/advanced options) are unaffected and remain local-network-based, so the host keeps them whether or not they are logged in.
 
-- A DJ panel opens where the viewer enters their name and configures genre, mood, and language
+Members can request the DJ slot via the **Generate Your Tracks** button. When granted:
+
+- A DJ panel opens where the DJ configures genre, mood, and language
+- **The DJ name is the account's nickname**, taken from the session — it is not a field the client sends, so it cannot be spoofed
 - Their selection becomes the next track's generation parameters
 - A cooldown timer (configurable, default 30 min) prevents rapid DJ switching
-- The active DJ's name is shown in the player ("PRESENTED BY [NAME]")
+- The active DJ's nickname is shown in the player ("PRESENTED BY [NAME]") and stored with each generated track
 
 ## Mid-session genre changes
 
@@ -115,6 +118,7 @@ Signup is **invite-only**. `scripts/setup.sh` writes `~/.generative-radio.env` (
 | `JWT_EXPIRE_DAYS` | `30` | Session lifetime. |
 | `COOKIE_SECURE` | `1` | `start.sh` sets `0` — Safari refuses Secure cookies over `http://localhost`. |
 | `USERS_DB_PATH` | `backend/users.db` | SQLite user store. Gitignored; **back this up**. |
+| `AUTH_ENFORCE` | `1` | Rollback switch. `0` lets everyone past the DJ and library gates without a redeploy. Not a mode to run in. |
 
 If either required variable is missing the radio still runs normally — only `/api/auth/*` returns `503` and nobody can log in. The startup banner says which variable is missing.
 
@@ -124,6 +128,10 @@ If either required variable is missing the radio still runs normally — only `/
 | POST | `/api/auth/login` | — | `{email, password}` |
 | POST | `/api/auth/logout` | — | Clears the cookie |
 | POST | `/api/auth/verify` | cookie or bearer | Session restore |
+| GET | `/api/library/index` | **member** | Full library metadata; ETag + `304` |
+| GET | `/api/library/audio/{id}` | **member** | Library mp3, for offline downloads |
+
+The WebSocket reads the same identity — browsers send the cookie on the upgrade automatically, and the mobile app appends `?token=`. An invalid or expired token does **not** close the socket: the radio is public and only DJ mode is gated, so a bad token degrades the connection to an anonymous listener.
 
 Two transports share one identity: the web app is same-origin with the API, so it uses an httpOnly cookie it can never read from JavaScript; the mobile app sends `Authorization: Bearer` and opts into a token in the response body with `X-Auth-Transport: bearer`.
 

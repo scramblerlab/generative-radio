@@ -42,13 +42,15 @@ export interface UseRadioReturn {
   seekBackward: () => void; // Seek -10s
   seekForward: () => void;  // Seek +10s
   // DJ mode
-  djAvailable: boolean;     // Whether this client is allowed to claim DJ at all (local or mobile)
+  djAvailable: boolean;     // Whether this client may claim DJ at all (signed-in members only)
+  djNickname: string;       // Signed-in nickname the server will use as the DJ name
+  djClaimRefusal: 'auth_required' | 'session_expired' | null;
   djLocked: boolean;
   djUnlockAt: number;       // Unix timestamp (seconds) when DJ button becomes available
   activeDjName: string;     // Name of the current DJ (empty if none)
   djPanelOpen: boolean;     // Whether the DJ panel modal is open for this client
   claimDj: () => void;
-  submitDj: (genres: string[], keywords: string[], language: string, feeling: string, djName: string) => void;
+  submitDj: (genres: string[], keywords: string[], language: string, feeling: string) => void;
   closeDjPanel: () => void;
   // Reactions
   reactionState: ReactionState;
@@ -89,6 +91,8 @@ export function useRadio(authVersion: number = 0): UseRadioReturn {
 
   // DJ mode state
   const [djAvailable, setDjAvailable] = useState(false);
+  const [djNickname, setDjNickname] = useState('');
+  const [djClaimRefusal, setDjClaimRefusal] = useState<'auth_required' | 'session_expired' | null>(null);
   const [djLocked, setDjLocked] = useState(true);
   const [djUnlockAt, setDjUnlockAt] = useState(0);
   const [activeDjName, setActiveDjName] = useState('');
@@ -343,11 +347,14 @@ export function useRadio(authVersion: number = 0): UseRadioReturn {
       console.log('[WS] Received event:', msg.event, msg.data);
 
       if (msg.event === 'role_assigned') {
-        const { role: assignedRole, djAvailable: assignedDjAvailable } = msg.data as unknown as RoleAssignedData;
+        const { role: assignedRole, djAvailable: assignedDjAvailable, nickname: assignedNickname } = msg.data as unknown as RoleAssignedData;
         console.log('[Radio] Role assigned:', assignedRole);
         roleRef.current = assignedRole;
         setRole(assignedRole);
         setDjAvailable(assignedDjAvailable);
+        setDjNickname(assignedNickname ?? '');
+        // A fresh role_assigned means identity was re-evaluated; drop any stale refusal.
+        setDjClaimRefusal(null);
       } else if (msg.event === 'track_ready') {
         const { track, isNext } = msg.data as unknown as TrackReadyData;
 
@@ -430,9 +437,16 @@ export function useRadio(authVersion: number = 0): UseRadioReturn {
         setDjUnlockAt(d.unlockAt);
         setActiveDjName(d.activeDjName);
       } else if (msg.event === 'dj_claim_ack') {
-        const { granted } = msg.data as unknown as DjClaimAckData;
-        console.log('[DJ] Claim ack — granted:', granted);
-        if (granted) setDjPanelOpen(true);
+        const { granted, reason } = msg.data as unknown as DjClaimAckData;
+        console.log('[DJ] Claim ack — granted:', granted, reason ? `(${reason})` : '');
+        if (granted) {
+          setDjPanelOpen(true);
+          setDjClaimRefusal(null);
+        } else {
+          // 'locked' is self-explanatory from the countdown already on screen;
+          // the auth cases are not, so surface those.
+          setDjClaimRefusal(reason === 'locked' ? null : reason ?? null);
+        }
       } else if (msg.event === 'play_now') {
         // Server-side watchdog: fired when frontend missed the `ended` event
         // (iOS Safari backgrounded, screen locked, audio interruption, etc.)
@@ -642,11 +656,13 @@ export function useRadio(authVersion: number = 0): UseRadioReturn {
 
   const submitDj = useCallback((
     genres: string[], keywords: string[],
-    language: string, feeling: string, djName: string,
+    language: string, feeling: string,
   ) => {
-    console.log('[DJ] Submitting DJ form — name:', djName);
+    // No djName: the server uses the nickname on the authenticated session, so
+    // the broadcast DJ name cannot be set by whatever the client sends.
+    console.log('[DJ] Submitting DJ form');
     setDjPanelOpen(false);
-    sendWS({ event: 'dj_submit', data: { genres, keywords, language, feeling, djName } });
+    sendWS({ event: 'dj_submit', data: { genres, keywords, language, feeling } });
   }, [sendWS]);
 
   const closeDjPanel = useCallback(() => setDjPanelOpen(false), []);
@@ -728,6 +744,8 @@ export function useRadio(authVersion: number = 0): UseRadioReturn {
     seekBackward,
     seekForward,
     djAvailable,
+    djNickname,
+    djClaimRefusal,
     djLocked,
     djUnlockAt,
     activeDjName,

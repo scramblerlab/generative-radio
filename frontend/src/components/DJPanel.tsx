@@ -9,14 +9,16 @@ const MOOD_CATEGORY_LABELS: Record<string, string> = {
 
 const MOOD_CATEGORY_ORDER = ['emotion', 'atmosphere', 'instrument'];
 const FEELING_MAX_LENGTH = 200;
-const DJ_NAME_MAX_LENGTH = 50;
 
 interface DJPanelProps {
-  onSubmit: (genres: string[], keywords: string[], language: string, feeling: string, djName: string) => void;
+  /** The signed-in nickname the server will broadcast as the DJ name. Shown
+   *  read-only — it is not sent, and could not be overridden if it were. */
+  nickname: string;
+  onSubmit: (genres: string[], keywords: string[], language: string, feeling: string) => void;
   onClose: () => void;
 }
 
-export function DJPanel({ onSubmit, onClose }: DJPanelProps) {
+export function DJPanel({ nickname, onSubmit, onClose }: DJPanelProps) {
   const [genres, setGenres] = useState<Genre[]>([]);
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [languages, setLanguages] = useState<Language[]>([]);
@@ -28,8 +30,6 @@ export function DJPanel({ onSubmit, onClose }: DJPanelProps) {
   const [randomCategories, setRandomCategories] = useState<Set<string>>(new Set());
   const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
   const [feeling, setFeeling] = useState('');
-  const [djName, setDjName] = useState('');
-  const [nameError, setNameError] = useState(false);
 
   useEffect(() => {
     fetch('/api/genres')
@@ -107,14 +107,10 @@ export function DJPanel({ onSubmit, onClose }: DJPanelProps) {
   };
 
   const handleSubmit = () => {
-    if (!djName.trim()) {
-      setNameError(true);
-      return;
-    }
     const keywordList = [...selectedKeywords];
     randomCategories.forEach((cat) => keywordList.push(`__random_${cat}__`));
     const genreArg = isRandomGenre ? ['__random__'] : [selectedGenre];
-    onSubmit(genreArg, keywordList, selectedLanguage, feeling, djName.trim());
+    onSubmit(genreArg, keywordList, selectedLanguage, feeling);
   };
 
   return (
@@ -228,21 +224,10 @@ export function DJPanel({ onSubmit, onClose }: DJPanelProps) {
             </section>
 
             <section className="selector__section">
-              <h2 className="selector__section-title">Your name?</h2>
-              <input
-                type="text"
-                className={`feeling-input${nameError && !djName.trim() ? ' feeling-input--error' : ''}`}
-                placeholder="e.g. DJ Nova"
-                value={djName}
-                onChange={(e) => {
-                  setDjName(e.target.value.slice(0, DJ_NAME_MAX_LENGTH));
-                  if (nameError) setNameError(false);
-                }}
-                maxLength={DJ_NAME_MAX_LENGTH}
-              />
-              {nameError && !djName.trim() && (
-                <p className="dj-panel__name-error">Your name is required to become the DJ</p>
-              )}
+              <h2 className="selector__section-title">Your DJ name</h2>
+              <p className="dj-panel__identity">
+                Broadcasting as <strong>{nickname}</strong>
+              </p>
             </section>
           </>
         )}

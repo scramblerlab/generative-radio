@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import WebSocket
+from fastapi import HTTPException, WebSocket
 from models import RadioState, TrackInfo, WSMessage, SongPrompt
 from llm import OllamaClient
 from acestep_client import ACEStepClient
@@ -22,6 +22,7 @@ from netutil import (
     is_local_ip as _is_local_ip,
     resolve_client_ip as _resolve_client_ip,
 )
+from auth import AuthUser, auth_enforced, verify_token
 
 logger = logging.getLogger(__name__)
 
@@ -129,18 +130,31 @@ class RadioOrchestrator:
     # WebSocket connection management
     # ------------------------------------------------------------------ #
 
-    def add_ws(self, ws: WebSocket) -> None:
+    def add_ws(
+        self, ws: WebSocket, user: AuthUser | None = None, token: str | None = None,
+    ) -> None:
+        """Register a connection. `user` is None for anonymous listeners — that is
+        a normal state, not an error: the radio itself is public, only DJ mode is
+        gated. The caller (main.py) has already validated the token."""
         self._ws_connections.append(ws)
         ip = _resolve_client_ip(ws)
         is_local = _is_local_ip(ip)
-        # Mobile app always identifies itself via ?client=mobile — its production
-        # builds connect through the same public tunnel as any web visitor, so IP
-        # alone can't distinguish it. DJ mode is otherwise restricted to local clients.
-        is_mobile = ws.query_params.get("client") == "mobile"
-        dj_available = is_local or is_mobile
         self._ws_meta[ws] = {
-            "ip": ip, "connected_at": time.time(), "is_local": is_local,
-            "dj_available": dj_available,
+            "ip": ip,
+            "connected_at": time.time(),
+            # Controller eligibility stays IP-based: the host controls the box on
+            # their own LAN, and should not be locked out of stop/skip by a login.
+            "is_local": is_local,
+            "user_id": user.id if user else None,
+            "nickname": user.nickname if user else "",
+            # Kept so DJ actions can re-verify rather than trusting an identity
+            # captured when the socket opened, possibly hours earlier.
+            "auth_token": token,
+            # Old mobile builds identify themselves but send no version. Used only
+            # to tell them to update — never for authorization.
+            "legacy_mobile": (
+                ws.query_params.get("client") == "mobile" and not ws.query_params.get("v")
+            ),
         }
         if self._controller_ws is None and is_local:
             # First local connection (or re-fill after controller left) → controller
@@ -155,6 +169,15 @@ class RadioOrchestrator:
         asyncio.create_task(self._broadcast_listener_count())
         asyncio.create_task(self._broadcast_viewer_list_to_controller())
         asyncio.create_task(self._broadcast_dj_state())
+
+        # Builds shipped before accounts existed got DJ mode from a ?client=mobile
+        # query param, which any browser could send. They have no login UI, so
+        # they cannot recover on their own — tell them why the button vanished.
+        # `error` is the only event those builds render, hence the channel.
+        if self._ws_meta[ws]["legacy_mobile"] and auth_enforced():
+            asyncio.create_task(self._send_to(ws, WSMessage(event="error", data={
+                "message": "Update the app to sign in — DJ mode and offline downloads now require an account.",
+            })))
 
         # Auto-start with RANDOM genre when the first client connects to an idle radio.
         # This covers both controller and remote-only (viewer) connections.
@@ -392,7 +415,11 @@ class RadioOrchestrator:
                 ws, WSMessage(event="error", data={"message": "At least one genre is required"})
             )
             return
-        self._dj_name = dj_name.strip()
+        # The controller is trusted by network position, so the free-text name is
+        # still honoured for a logged-out host. When they are signed in, their
+        # nickname wins — an authenticated identity should not be overridable by
+        # a value typed into the same client.
+        self._dj_name = self._dj_name_for(ws) or dj_name.strip()
         await self.start(genres, keywords, language, feeling, advanced_options)
         await self._broadcast_dj_state()
 
@@ -632,17 +659,41 @@ class RadioOrchestrator:
             ),
         )
 
+    def _is_dj_eligible(self, ws: WebSocket) -> bool:
+        """DJ mode requires a signed-in user, on every client including local ones.
+
+        AUTH_ENFORCE=0 disables the gate without a redeploy — a rollback switch,
+        not a supported mode.
+        """
+        if not auth_enforced():
+            return True
+        return bool(self._ws_meta.get(ws, {}).get("user_id"))
+
+    def _role_assigned_message(self, ws: WebSocket, role: str) -> WSMessage:
+        """Build role_assigned for one connection.
+
+        Every sender goes through here. Previously each built the payload inline
+        and _promote_next_controller omitted djAvailable entirely, so a promoted
+        local viewer silently lost the DJ button.
+        """
+        meta = self._ws_meta.get(ws, {})
+        return WSMessage(event="role_assigned", data={
+            # Wire name kept for client compatibility; the meaning is now
+            # "this connection may claim the DJ slot".
+            "djAvailable": self._is_dj_eligible(ws),
+            "role": role,
+            "nickname": meta.get("nickname", ""),
+        })
+
     async def _send_controller_snapshot(self, ws: WebSocket) -> None:
         """Unicast role_assigned:controller + current session state to a newly connected controller."""
-        dj_available = self._ws_meta.get(ws, {}).get("dj_available", False)
-        await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "controller", "djAvailable": dj_available}))
+        await self._send_to(ws, self._role_assigned_message(ws, "controller"))
         await self._send_to(ws, self._make_dj_state_message())
         await self._send_session_snapshot(ws)
 
     async def _send_viewer_snapshot(self, ws: WebSocket) -> None:
         """Unicast role_assigned:viewer + current session state to a newly connected viewer."""
-        dj_available = self._ws_meta.get(ws, {}).get("dj_available", False)
-        await self._send_to(ws, WSMessage(event="role_assigned", data={"role": "viewer", "djAvailable": dj_available}))
+        await self._send_to(ws, self._role_assigned_message(ws, "viewer"))
         await self._send_to(ws, self._make_dj_state_message())
         await self._send_session_snapshot(ws)
 
@@ -659,10 +710,7 @@ class RadioOrchestrator:
             return
         self._controller_ws = new_controller
         logger.info("[radio] Local viewer promoted to controller")
-        await self._send_to(
-            new_controller,
-            WSMessage(event="role_assigned", data={"role": "controller"}),
-        )
+        await self._send_to(new_controller, self._role_assigned_message(new_controller, "controller"))
         # Send fresh viewer list to the newly promoted controller
         await self._broadcast_viewer_list_to_controller()
 
@@ -676,6 +724,7 @@ class RadioOrchestrator:
             result.append({
                 "ip": meta.get("ip", "unknown"),
                 "connectedAt": meta.get("connected_at", 0),
+                "nickname": meta.get("nickname", ""),
             })
         return result
 
@@ -1427,15 +1476,48 @@ class RadioOrchestrator:
     async def _broadcast_dj_state(self) -> None:
         await self.broadcast(self._make_dj_state_message())
 
+    def _refresh_ws_identity(self, ws: WebSocket) -> bool:
+        """Re-verify the stored token, downgrading the connection on failure.
+
+        A socket can stay open for hours, so "identity captured at connect,
+        trusted forever" would let an expired session keep DJing. Called only at
+        the two privileged entry points, so the cost is two HMAC verifications
+        per DJ interaction rather than one per frame.
+        """
+        if not auth_enforced():
+            return True
+        meta = self._ws_meta.get(ws)
+        if not meta:
+            return False
+        token = meta.get("auth_token")
+        if not token:
+            return False
+        try:
+            user = verify_token(token)
+        except HTTPException:
+            logger.info("[radio] WS session expired — downgrading connection to anonymous")
+            meta["user_id"] = None
+            meta["nickname"] = ""
+            meta["auth_token"] = None
+            # Push a fresh role_assigned so the UI greys the DJ button out now,
+            # instead of the user discovering it through a failed claim.
+            role = "controller" if ws is self._controller_ws else "viewer"
+            asyncio.create_task(self._send_to(ws, self._role_assigned_message(ws, role)))
+            return False
+        meta["nickname"] = user.nickname
+        return True
+
     async def claim_dj_from_ws(self, ws: WebSocket) -> None:
         """First-click-wins claim. Safe: no await between guard check and mutation."""
-        if not self._ws_meta.get(ws, {}).get("dj_available", False):
-            logger.warning("[radio] dj_claim rejected — client not eligible (remote web viewer)")
-            await self._send_to(ws, WSMessage(event="dj_claim_ack", data={"granted": False}))
+        if not self._is_dj_eligible(ws) or not self._refresh_ws_identity(ws):
+            logger.info("[radio] dj_claim rejected — not signed in")
+            await self._send_to(ws, WSMessage(
+                event="dj_claim_ack", data={"granted": False, "reason": "auth_required"}))
             return
         now = time.time()
         if now < self._dj_lock_until or self._dj_claimant_ws is not None:
-            await self._send_to(ws, WSMessage(event="dj_claim_ack", data={"granted": False}))
+            await self._send_to(ws, WSMessage(
+                event="dj_claim_ack", data={"granted": False, "reason": "locked"}))
             return
         # Atomic claim: assign before any await
         self._dj_claimant_ws = ws
@@ -1460,17 +1542,41 @@ class RadioOrchestrator:
         keywords: list[str],
         language: str,
         feeling: str,
-        dj_name: str,
     ) -> None:
-        """Apply DJ's selections via the existing reschedule pathway."""
+        """Apply DJ's selections via the existing reschedule pathway.
+
+        The DJ name is taken from the authenticated session, never from the
+        payload. It was previously a free-text field the client sent, applied
+        with no validation — so any WebSocket client could set the name every
+        listener sees, and it is stamped onto TrackInfo.dj_name and written into
+        the permanent library sidecar for each generated track.
+        """
         if ws != self._dj_claimant_ws:
             logger.warning("[radio] dj_submit rejected — sender is not the current claimant")
             return
-        self._dj_name = dj_name.strip()
+
+        nickname = self._dj_name_for(ws)
+        if nickname is None:
+            # Session expired between claiming and submitting. Release the slot
+            # rather than stranding it until the lock times out.
+            self._dj_claimant_ws = None
+            self._dj_lock_until = time.time()
+            await self._send_to(ws, WSMessage(
+                event="dj_claim_ack", data={"granted": False, "reason": "session_expired"}))
+            await self._broadcast_dj_state()
+            return
+
+        self._dj_name = nickname
         self._dj_claimant_ws = None
         logger.info(f"[radio] DJ submitted: name={self._dj_name!r}, genres={genres}, language={language}")
         await self.reschedule(genres, keywords, language, feeling, advanced_options=None)
         await self._broadcast_dj_state()
+
+    def _dj_name_for(self, ws: WebSocket) -> str | None:
+        """The authenticated nickname for this connection, or None if it has none."""
+        if not self._refresh_ws_identity(ws):
+            return None
+        return self._ws_meta.get(ws, {}).get("nickname") or None
 
     # ------------------------------------------------------------------ #
     # WebSocket broadcast helpers
