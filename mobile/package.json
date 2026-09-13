@@ -9,14 +9,17 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@expo-google-fonts/bebas-neue": "^0.4.1",
+    "@expo-google-fonts/space-grotesk": "^0.4.1",
+    "@expo/vector-icons": "^15.0.2",
     "@kesha-antonov/react-native-background-downloader": "^4.5.4",
     "@radio/shared": "*",
     "@react-navigation/native": "^7.2.2",
-    "@react-navigation/stack": "^7.8.9",
     "expo": "55.0.10-canary-20260328-bdc6273",
     "expo-audio": "55.0.10-canary-20260328-bdc6273",
     "expo-constants": "55.0.10-canary-20260328-bdc6273",
     "expo-file-system": "55.0.13-canary-20260328-bdc6273",
+    "expo-font": "55.0.5-canary-20260328-bdc6273",
     "expo-secure-store": "55.0.10-canary-20260328-bdc6273",
     "expo-status-bar": "55.0.5-canary-20260328-bdc6273",
     "react": "19.2.0",

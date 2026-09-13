@@ -12,11 +12,6 @@
     "mobile": "npm run start --workspace=mobile",
     "postinstall": "patch-package"
   },
-  "dependencies": {
-    "@expo-google-fonts/bebas-neue": "^0.4.1",
-    "@expo-google-fonts/space-grotesk": "^0.4.1",
-    "expo-font": "^55.0.4"
-  },
   "devDependencies": {
     "patch-package": "^8.0.1"
   }
