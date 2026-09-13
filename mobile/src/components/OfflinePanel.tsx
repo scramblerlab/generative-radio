@@ -10,6 +10,7 @@ import {
   OfflineTrackMeta,
   DownloadProgress,
   fetchLibraryIndex,
+  LibraryAuthError,
   filterTracks,
   sampleTracks,
   scanOfflineTracks,
@@ -25,11 +26,13 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   onStartOffline: (tracks: OfflineTrackMeta[]) => void;
+  /** Bearer token for the members-only library endpoints. */
+  token: string | null;
 }
 
 type Phase = 'setup' | 'downloading';
 
-export function OfflinePanel({ visible, onClose, onStartOffline }: Props) {
+export function OfflinePanel({ visible, onClose, onStartOffline, token }: Props) {
   const [phase, setPhase] = useState<Phase>('setup');
   const [maxTracksText, setMaxTracksText] = useState(String(DEFAULT_MAX_TRACKS));
   const [keyword, setKeyword] = useState('');
@@ -49,11 +52,15 @@ export function OfflinePanel({ visible, onClose, onStartOffline }: Props) {
     setCancelling(false);
     setExistingCount(scanOfflineTracks().length);
 
-    fetchLibraryIndex()
+    fetchLibraryIndex(token)
       .then((r) => setIndex(r.tracks))
-      .catch(() => {
+      .catch((err) => {
         setIndex([]);
-        setIndexError('Library unavailable — check connection');
+        // A 401 is a sign-in problem, not a connectivity one — saying "check
+        // connection" when the network is fine sends the user the wrong way.
+        setIndexError(err instanceof LibraryAuthError
+          ? 'Sign in to download tracks'
+          : 'Library unavailable — check connection');
       });
 
     fetch(`${BACKEND_URL}/api/genres`)
@@ -65,7 +72,7 @@ export function OfflinePanel({ visible, onClose, onStartOffline }: Props) {
       .catch(() => {
         setGenres(loadCachedGenres() ?? []);
       });
-  }, [visible]);
+  }, [visible, token]);
 
   const maxTracks = useMemo(() => {
     if (maxTracksText.trim() === '') return DEFAULT_MAX_TRACKS;
@@ -92,7 +99,7 @@ export function OfflinePanel({ visible, onClose, onStartOffline }: Props) {
     setPhase('downloading');
     setProgress({ done: 0, total: selected.length, failed: 0 });
     try {
-      const result = await downloadTracks(selected, setProgress, () => cancelRef.current);
+      const result = await downloadTracks(selected, setProgress, () => cancelRef.current, token);
       if (result.cancelled) {
         // Partial set kept on disk — playable via PLAY EXISTING TRACKS.
         setExistingCount(scanOfflineTracks().length);

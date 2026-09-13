@@ -14,15 +14,18 @@ const MOOD_CATEGORY_LABELS: Record<string, string> = {
   instrument: 'Instrument',
 };
 const FEELING_MAX_LENGTH = 200;
-const DJ_NAME_MAX_LENGTH = 50;
 
 interface Props {
   visible: boolean;
-  onSubmit: (genres: string[], keywords: string[], language: string, feeling: string, djName: string) => void;
+  onSubmit: (genres: string[], keywords: string[], language: string, feeling: string) => void;
   onClose: () => void;
+  /** The signed-in nickname the server will credit this session to. The DJ name
+   *  is no longer typed here — the server takes it from the session and ignores
+   *  anything the client sends. */
+  nickname: string;
 }
 
-export function DJPanel({ visible, onSubmit, onClose }: Props) {
+export function DJPanel({ visible, onSubmit, onClose, nickname }: Props) {
   const [genres, setGenres] = useState<Genre[]>([]);
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [languages, setLanguages] = useState<Language[]>([]);
@@ -32,8 +35,6 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
   const [randomCategories, setRandomCategories] = useState<Set<string>>(new Set());
   const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
   const [feeling, setFeeling] = useState('');
-  const [djName, setDjName] = useState('');
-  const [nameError, setNameError] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -103,14 +104,10 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
   };
 
   const handleSubmit = () => {
-    if (!djName.trim()) {
-      setNameError(true);
-      return;
-    }
     const keywordList = [...selectedKeywords];
     randomCategories.forEach((cat) => keywordList.push(`__random_${cat}__`));
     const genreArg = isRandomGenre ? ['__random__'] : [selectedGenre];
-    onSubmit(genreArg, keywordList, selectedLanguage, feeling, djName.trim());
+    onSubmit(genreArg, keywordList, selectedLanguage, feeling);
   };
 
   return (
@@ -223,19 +220,9 @@ export function DJPanel({ visible, onSubmit, onClose }: Props) {
               <Text style={styles.charCounter}>{feeling.length}/{FEELING_MAX_LENGTH}</Text>
             </View>
 
-            {/* DJ Name */}
-            <Text style={styles.sectionLabel}>Your name?</Text>
-            <TextInput
-              style={[styles.textInput, nameError && !djName.trim() ? styles.inputError : null]}
-              value={djName}
-              onChangeText={(t) => { setDjName(t.slice(0, DJ_NAME_MAX_LENGTH)); if (nameError) setNameError(false); }}
-              placeholder="e.g. DJ Nova"
-              placeholderTextColor={colors.border2}
-              maxLength={DJ_NAME_MAX_LENGTH}
-            />
-            {nameError && !djName.trim() && (
-              <Text style={styles.errorText}>Your name is required to become the DJ</Text>
-            )}
+            {/* DJ name — read-only: it is the account nickname */}
+            <Text style={styles.sectionLabel}>Your name</Text>
+            <Text style={styles.djNameText}>DJ: {nickname}</Text>
 
           </ScrollView>
         )}
@@ -308,8 +295,7 @@ const styles = StyleSheet.create({
   feelingWrapper:   { position: 'relative' },
   textInput:        { fontFamily: fonts.regular, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 12, paddingRight: 52, color: colors.text, fontSize: 14 },
   charCounter:      { fontFamily: fonts.regular, position: 'absolute', right: 10, top: 0, bottom: 0, textAlignVertical: 'center', color: colors.border2, fontSize: 10 },
-  inputError:       { borderColor: colors.red },
-  errorText:        { fontFamily: fonts.regular, color: colors.red, fontSize: 12, marginTop: 4 },
+  djNameText:       { fontFamily: fonts.semiBold, color: colors.accent, fontSize: 15, letterSpacing: 0.3 },
 
   // Footer — vertical layout
   footer:        { padding: 20, paddingBottom: 40, borderTopWidth: 1, borderTopColor: colors.border, gap: 12 },

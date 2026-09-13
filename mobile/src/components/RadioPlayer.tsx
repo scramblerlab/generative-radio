@@ -171,6 +171,11 @@ interface Props {
   offlineTrackCount?: number;
   onOpenOfflinePanel?: () => void;
   onExitOffline?: () => void;
+  /** Account controls. Exactly one of these is defined at a time: signed-out
+   *  listeners get onSignIn, members get onSignOut. */
+  onSignIn?: () => void;
+  onSignOut?: () => void;
+  nickname?: string;
 }
 
 export function RadioPlayer({
@@ -180,6 +185,7 @@ export function RadioPlayer({
   onTogglePlayPause, onSeekBackward, onSeekForward,
   onChangeGenre, onClaimDj, onReact,
   offlineMode, offlineTrackCount, onOpenOfflinePanel, onExitOffline,
+  onSignIn, onSignOut, nickname,
 }: Props) {
   const insets = useSafeAreaInsets();
   const isPlaying = status === 'playing' && !localPaused;
@@ -407,6 +413,23 @@ export function RadioPlayer({
                   </TouchableOpacity>
                 </View>
               )}
+              {/* Account. DJ mode and offline downloads are members-only, so a
+                  signed-out listener sees neither button above — only this. */}
+              {onSignIn && (
+                <View style={styles.djSection}>
+                  <TouchableOpacity style={[styles.djBtn, styles.djBtnLocked]} onPress={onSignIn}>
+                    <Text style={[styles.djBtnText, styles.djBtnTextLocked]}>Sign In</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {onSignOut && (
+                <View style={styles.djSection}>
+                  <Text style={styles.signedInAs}>Signed in as {nickname}</Text>
+                  <TouchableOpacity onPress={onSignOut}>
+                    <Text style={styles.signOutText}>Sign out</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </>
           )}
         </View>
@@ -497,6 +520,8 @@ const styles = StyleSheet.create({
   djBtnText: { color: '#000', fontSize: 14, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
   djBtnTextLocked: { color: colors.textMuted },
   djCountdown: { textAlign: 'center', color: colors.textMuted, fontSize: 12, marginTop: 6 },
+  signedInAs:  { textAlign: 'center', color: colors.textMuted, fontSize: 12 },
+  signOutText: { textAlign: 'center', color: colors.textDim, fontSize: 13, marginTop: 6, textDecorationLine: 'underline' },
 
   footer: { textAlign: 'center', color: colors.textMuted, fontSize: 10, letterSpacing: 1, marginTop: 24, textTransform: 'uppercase' },
 });

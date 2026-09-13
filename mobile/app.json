@@ -2,7 +2,7 @@
   "expo": {
     "name": "Generative Radio",
     "slug": "generative-radio",
-    "version": "1.5.0",
+    "version": "1.6.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -13,7 +13,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "5",
+      "buildNumber": "6",
       "bundleIdentifier": "com.generativeradio.app",
       "infoPlist": {
         "UIBackgroundModes": [
@@ -40,7 +40,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.generativeradio.app",
-      "versionCode": 5,
+      "versionCode": 6,
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.INTERNET",
