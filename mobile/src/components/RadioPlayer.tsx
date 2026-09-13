@@ -246,17 +246,21 @@ export function RadioPlayer({
 
         {/* Card */}
         <View style={styles.card}>
-          {/* Genre / controller badge */}
-          {badgeLabel && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{badgeLabel}</Text>
-            </View>
-          )}
-
-          {/* Offline mode banner */}
-          {offlineMode && (
-            <View style={[styles.badge, { alignSelf: 'center', marginBottom: 12 }]}>
-              <Text style={styles.badgeText}>OFFLINE MODE · {offlineTrackCount ?? 0} TRACKS</Text>
+          {/* Badges — genre / controller, and offline state. One row: they are
+              the same kind of label, so stacking them (and centring only the
+              second) read as a mistake. Wraps when the labels are long. */}
+          {(badgeLabel || offlineMode) && (
+            <View style={styles.badgeRow}>
+              {badgeLabel && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{badgeLabel}</Text>
+                </View>
+              )}
+              {offlineMode && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>OFFLINE MODE · {offlineTrackCount ?? 0} TRACKS</Text>
+                </View>
+              )}
             </View>
           )}
 
@@ -464,14 +468,19 @@ const styles = StyleSheet.create({
   },
 
   // Badge
-  badge: {
+  badgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     alignSelf: 'flex-start',
+    gap: 8,
+    marginBottom: 16,
+  },
+  badge: {
     borderWidth: 1,
     borderColor: colors.accent,
     borderRadius: radius.pill,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    marginBottom: 16,
   },
   badgeText: { fontFamily: fonts.semiBold, color: colors.accent, fontSize: 11, letterSpacing: 0.5 },
 
