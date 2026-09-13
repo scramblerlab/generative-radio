@@ -57,3 +57,26 @@ export async function downloadAudio(track: Track): Promise<string> {
     task.start();
   });
 }
+
+/**
+ * Stop any in-flight download of the online track.
+ *
+ * These tasks are native and survive the JS-side switch into offline mode, so
+ * without this they keep pulling an mp3 over cellular that nothing will ever
+ * play — the opposite of what the user asked for by going offline.
+ *
+ * Best-effort by design: it is called on a path that must not fail.
+ */
+export async function cancelCurrentDownload(): Promise<void> {
+  try {
+    const tasks = await getExistingDownloadTasks();
+    for (const t of tasks as DownloadTask[]) {
+      if (t.id === DOWNLOAD_TASK_ID) {
+        console.log('[Download] Cancelling in-flight task');
+        t.stop();
+      }
+    }
+  } catch (err) {
+    console.warn('[Download] Could not cancel in-flight task', err);
+  }
+}

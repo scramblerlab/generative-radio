@@ -20,7 +20,7 @@ import {
   ReactionUpdateData,
 } from '@radio/shared';
 import { BACKEND_URL, wsUrl } from '../config';
-import { downloadAudio } from '../utils/downloadAudio';
+import { downloadAudio, cancelCurrentDownload } from '../utils/downloadAudio';
 import { fetchStatusNative, sendTrackEndedNative } from '../modules/backgroundHttp';
 import type { StatusResult } from '../modules/backgroundHttp';
 import {
@@ -28,6 +28,11 @@ import {
   offlineTrackUri,
   metaToTrack,
   shuffled,
+  scanOfflineTracks,
+  cleanupStagingDir,
+  isOfflineModePersisted,
+  setOfflineModePersisted,
+  timeoutSignal,
 } from '../utils/offlineLibrary';
 
 // ------------------------------------------------------------------ //
@@ -83,7 +88,9 @@ export interface UseRadioReturn {
   offlineMode: boolean;
   offlineTrackCount: number;
   enterOfflineMode: (tracks: OfflineTrackMeta[]) => void;
-  exitOfflineMode: () => void;
+  /** Async: it first checks the server is reachable and refuses (leaving
+   *  offline mode intact) when it is not. */
+  exitOfflineMode: () => Promise<void>;
 }
 
 const RECONNECT_BASE_MS = 1_000;
@@ -100,6 +107,11 @@ const BG_FIRST_TRACK_WAIT_CAP_MS = 10 * 60_000;
 // A fetchAndPlay run older than this is considered a zombie (iOS suspended the
 // JS thread mid-await and never resumed it); play_now may break its mutex.
 const FETCH_STUCK_MS = 120_000;
+// Upper bound on any library track. Backs the offline background watchdog, the
+// last line of defence when both didJustFinish and the duration timer are gone.
+const MAX_TRACK_MS = 6 * 60_000;
+// How long to wait for the server before deciding we are still offline.
+const REACHABILITY_TIMEOUT_MS = 4_000;
 
 export interface RadioAuthInput {
   /** Bearer JWT from useAuth, or null when signed out. */
@@ -188,6 +200,8 @@ export function useRadio(
   const bgTrackEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Cap timer for the iOS background first-track wait (silence bridge + polling).
   const bgWaitCapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Offline background watchdog — fires only if nothing else advanced the queue.
+  const bgWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // expo-audio player refs
   const playerRef = useRef<AudioPlayer | null>(null);        // active music player
@@ -199,6 +213,11 @@ export function useRadio(
   const offlineTracksRef   = useRef<Map<string, OfflineTrackMeta>>(new Map()); // id → meta
   const offlineQueueRef    = useRef<string[]>([]);   // shuffled ids
   const offlineQueuePosRef = useRef(-1);             // index of currently playing entry
+  // Tracks staged by mount for an offline resume, consumed once the audio
+  // session is ready. enterOfflineMode is a useCallback defined much further
+  // down, so it is reached through a ref.
+  const pendingOfflineResumeRef = useRef<OfflineTrackMeta[] | null>(null);
+  const enterOfflineModeRef = useRef<((t: OfflineTrackMeta[]) => void) | null>(null);
 
   // ------------------------------------------------------------------ //
   // expo-audio setup
@@ -214,6 +233,14 @@ export function useRadio(
 //    console.log('[Audio] Calling setAudioModeAsync:', JSON.stringify(mode));
     setAudioModeAsync(mode).then(() => {
       playerReadyRef.current = true;
+      // Offline resume waits here rather than running at mount: enterOfflineMode
+      // refuses to touch anything until the audio session exists, so firing it
+      // earlier would silently do nothing and leave the app on a dead screen.
+      const resume = pendingOfflineResumeRef.current;
+      if (resume) {
+        pendingOfflineResumeRef.current = null;
+        enterOfflineModeRef.current?.(resume);
+      }
       console.log('[Audio] ✅ setAudioModeAsync resolved — playsInSilentMode:true shouldPlayInBackground:true interruptionMode:doNotMix');
     }).catch((err: Error) => {
       console.error('[Audio] ❌ setAudioModeAsync FAILED:', err);
@@ -561,7 +588,13 @@ export function useRadio(
   const dropOfflineTrack = (id: string | null) => {
     if (!id) return;
     offlineTracksRef.current.delete(id);
+    // The queue position is an index, so removing an entry at or before it
+    // shifts every later entry down by one and the position now names a
+    // different track. Left uncorrected, each dropped track silently skipped a
+    // perfectly good one as well.
+    const idx = offlineQueueRef.current.indexOf(id);
     offlineQueueRef.current = offlineQueueRef.current.filter((x) => x !== id);
+    if (idx !== -1 && idx <= offlineQueuePosRef.current) offlineQueuePosRef.current -= 1;
     if (offlineQueuePosRef.current >= offlineQueueRef.current.length) offlineQueuePosRef.current = -1;
     setOfflineTrackCount(offlineTracksRef.current.size);
   };
@@ -600,16 +633,37 @@ export function useRadio(
     // while backgrounded, suspend the listener and arm a duration-based backup
     // timer (didJustFinish delivery is unreliable in throttled bg JS).
     if (Platform.OS === 'ios' && isBackgroundRef.current) {
-      playerSubRef.current?.remove(); playerSubRef.current = null;
       if (bgTrackEndTimerRef.current) clearTimeout(bgTrackEndTimerRef.current);
-      const ms = (meta.duration ?? 0) * 1000;
+      // A sidecar written before durations were recorded has none, and the
+      // player has not loaded far enough to report one yet either. Previously
+      // that produced ms === 0, no backup timer — and the listener had already
+      // been removed, so the track ended in the background with no route back
+      // and playback simply stopped for good.
+      const seconds = meta.duration ?? player.duration ?? 0;
+      const ms = seconds * 1000;
       if (ms > 0) {
+        playerSubRef.current?.remove(); playerSubRef.current = null;
         bgTrackEndTimerRef.current = setTimeout(() => {
           if (isBackgroundRef.current && !localPausedRef.current && !isFetchingRef.current) {
             handleTrackEndedRef.current?.();
           }
         }, ms + 3_000);
+      } else {
+        // No duration to time against: keep the listener attached so
+        // didJustFinish stays as the one remaining route, matching what the
+        // online path does when it cannot arm a timer. Costs background
+        // wakeups; silence costs the whole session.
+        console.warn('[Offline] no duration for', meta.trackId, '— keeping the status listener as the only track-end route');
       }
+      // Last resort either way: no track in this library runs longer than this,
+      // so a missed end cannot strand playback indefinitely.
+      if (bgWatchdogRef.current) clearTimeout(bgWatchdogRef.current);
+      bgWatchdogRef.current = setTimeout(() => {
+        if (isBackgroundRef.current && !localPausedRef.current && !isFetchingRef.current) {
+          console.warn('[Offline] max-track watchdog fired — advancing');
+          handleTrackEndedRef.current?.();
+        }
+      }, MAX_TRACK_MS);
     }
   }, [attachStatusListener, stopSilenceBridge, teardownPlayer]);
 
@@ -1107,6 +1161,28 @@ export function useRadio(
   // Mount: connect WS and immediately start fetching (always-viewer)
   useEffect(() => {
     isActiveRef.current = true;
+    // A staging directory here means a download was killed mid-flight. It is
+    // never useful, and on Android it holds the truncated mp3 files.
+    cleanupStagingDir();
+
+    // Resume offline mode across a restart. A cold start in airplane mode used
+    // to come up as the online radio and sit in a reconnect loop — the app
+    // worked on a plane only for as long as you never closed it.
+    if (isOfflineModePersisted()) {
+      const tracks = scanOfflineTracks();
+      if (tracks.length > 0) {
+        console.log('[Offline] resuming offline mode from last run —', tracks.length, 'tracks');
+        // Hand off to the audio-ready path; deliberately skip connectWebSocket
+        // and the first fetch so no online traffic happens at all.
+        pendingOfflineResumeRef.current = tracks;
+        return () => { isActiveRef.current = false; };
+      }
+      // The library went away (uninstalled data, manual clear) — do not strand
+      // the app in an offline mode with nothing to play.
+      console.log('[Offline] persisted offline mode had no tracks — starting online');
+      setOfflineModePersisted(false);
+    }
+
     connectWebSocket();
     // Mark play-intent before the first fetch (mirrors tuneIn). localPaused
     // initializes true, and without this handleWake and play_now bail at their
@@ -1140,7 +1216,12 @@ export function useRadio(
     // Offline mode deliberately holds no socket. Signing out mid-playback must
     // not reconnect — or interrupt the track. exitOfflineMode connects later
     // with whatever identity is current by then.
-    if (offlineModeRef.current || !isActiveRef.current) return;
+    //
+    // The pending check covers the window during an offline resume: hydrating
+    // the session from SecureStore bumps authVersion within milliseconds of
+    // mount, before enterOfflineMode has run, so without it a resume would open
+    // the very socket it is trying not to open.
+    if (offlineModeRef.current || pendingOfflineResumeRef.current || !isActiveRef.current) return;
     if (wsRef.current) {
       const dyingWs = wsRef.current;
       wsRef.current = null;
@@ -1191,6 +1272,10 @@ export function useRadio(
         if (bgTrackEndTimerRef.current) {
           clearTimeout(bgTrackEndTimerRef.current);
           bgTrackEndTimerRef.current = null;
+        }
+        if (bgWatchdogRef.current) {
+          clearTimeout(bgWatchdogRef.current);
+          bgWatchdogRef.current = null;
         }
         // Cancel the background first-track wait cap; the foreground
         // handleWake/fetch path takes over recovery from here.
@@ -1291,6 +1376,7 @@ export function useRadio(
       clearTimeout(bgTrackEndTimerRef.current);
       bgTrackEndTimerRef.current = null;
     }
+    if (bgWatchdogRef.current) { clearTimeout(bgWatchdogRef.current); bgWatchdogRef.current = null; }
     stopSilenceBridge();
     if (playerReadyRef.current) teardownPlayer();
   }, [stopPolling, stopSilenceBridge, teardownPlayer]);
@@ -1301,7 +1387,11 @@ export function useRadio(
     // session is still initialising used to leave the banner up with the online
     // track audible, because playOfflineTrack returned early.
     if (!playerReadyRef.current) return;
+    // Re-entering would rebuild the queue mid-playback and restart the track.
+    // exitOfflineMode has always had this guard; its counterpart did not.
+    if (offlineModeRef.current) return;
     setOfflineMode(true);
+    setOfflineModePersisted(true);
     // ---- suppress ALL server activity ----
     stopPolling();                                        // pollTimerRef
     fetchEpochRef.current++;                              // invalidate any in-flight fetchAndPlay
@@ -1315,6 +1405,10 @@ export function useRadio(
     if (bgTrackEndTimerRef.current) { clearTimeout(bgTrackEndTimerRef.current); bgTrackEndTimerRef.current = null; }
     if (bgWaitCapTimerRef.current)  { clearTimeout(bgWaitCapTimerRef.current);  bgWaitCapTimerRef.current  = null; }
     bgStatusCleanupRef.current?.(); bgStatusCleanupRef.current = null;    // Android native fetch listener
+    // A native background download of the *online* track can outlive the switch
+    // and land in documents/track_current.mp3 long after we stopped caring,
+    // burning cellular data the user went offline to avoid.
+    cancelCurrentDownload();
     stopSilenceBridge();
     // ---- reset online-only UI state ----
     setListenerCount(0); setViewers([]); setActivityLog([]);
@@ -1330,10 +1424,33 @@ export function useRadio(
     playNextOffline();
   }, [stopPolling, stopSilenceBridge, playNextOffline]);
 
-  const exitOfflineMode = useCallback(() => {
+  // Published for the mount-time offline resume, which runs before this
+  // callback exists in scope.
+  useEffect(() => {
+    enterOfflineModeRef.current = enterOfflineMode;
+  }, [enterOfflineMode]);
+
+  const exitOfflineMode = useCallback(async () => {
     if (!offlineModeRef.current) return;
+    // Confirm the server is actually reachable BEFORE tearing down offline
+    // state. Pressing this in airplane mode used to wipe the queue, stop the
+    // player and drop into a reconnect loop with nothing playing — the one
+    // situation where offline mode was most wanted.
+    const probe = timeoutSignal(REACHABILITY_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/radio/status`, { signal: probe.signal });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+    } catch (err) {
+      console.log('[Offline] exit refused — server unreachable:', err);
+      setErrorMessage('Still offline — no connection to the radio');
+      return;                                   // queue, player and files untouched
+    } finally {
+      probe.cancel();
+    }
     setOfflineMode(false);
+    setOfflineModePersisted(false);
     if (bgTrackEndTimerRef.current) { clearTimeout(bgTrackEndTimerRef.current); bgTrackEndTimerRef.current = null; }
+    if (bgWatchdogRef.current) { clearTimeout(bgWatchdogRef.current); bgWatchdogRef.current = null; }
     playerSubRef.current?.remove(); playerSubRef.current = null;
     teardownPlayer();                                    // same teardown as tuneOut
     offlineTracksRef.current = new Map();

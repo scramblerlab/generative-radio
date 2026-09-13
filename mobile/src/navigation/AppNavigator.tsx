@@ -84,7 +84,7 @@ export function AppNavigator({ radio, auth }: Props) {
             onReact={offlineMode ? undefined : react}
             offlineMode={offlineMode}
             offlineTrackCount={offlineTrackCount}
-            onOpenOfflinePanel={showOffline ? () => setOfflinePanelOpen(true) : undefined}
+            onOpenOfflinePanel={offlineMode || !showOffline ? undefined : () => setOfflinePanelOpen(true)}
             onExitOffline={exitOfflineMode}
             onSignIn={isLoading || isAuthenticated ? undefined : () => setAuthModalOpen(true)}
             onSignOut={isAuthenticated ? logout : undefined}
@@ -102,6 +102,12 @@ export function AppNavigator({ radio, auth }: Props) {
           onClose={() => setOfflinePanelOpen(false)}
           onStartOffline={enterOfflineMode}
           token={token}
+          // DOWNLOAD wipes and replaces the library. Doing that while offline
+          // mode is playing from it would delete the file under the player.
+          // The gate above already hides the entry point; this carries the same
+          // invariant into the code that does the deleting, instead of leaving
+          // it to a JSX ternary.
+          allowClear={!offlineMode}
         />
         <AuthModal
           visible={authModalOpen}
