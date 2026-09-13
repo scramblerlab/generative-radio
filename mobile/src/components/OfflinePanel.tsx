@@ -11,6 +11,7 @@ import {
   DownloadProgress,
   fetchLibraryIndex,
   FETCH_TIMEOUT_MS,
+  timeoutSignal,
   LibraryAuthError,
   LibraryDisabledError,
   filterTracks,
@@ -44,7 +45,7 @@ type Phase = 'setup' | 'downloading';
 function describeIndexError(err: unknown): string {
   if (err instanceof LibraryAuthError) return 'Sign in to download tracks';
   if (err instanceof LibraryDisabledError) return 'The track library is unavailable on the server';
-  if (err instanceof Error && err.name === 'TimeoutError') return 'The server took too long to respond';
+  if (err instanceof Error && err.name === 'AbortError') return 'The server took too long to respond';
   return 'Library unavailable — check connection';
 }
 
@@ -88,7 +89,9 @@ export function OfflinePanel({ visible, onClose, onStartOffline, token, allowCle
 
     // Same bound as the index fetch: without it a half-open socket leaves the
     // genre pills missing with no explanation and no cached fallback applied.
-    fetch(`${BACKEND_URL}/api/genres`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+    const genresTimeout = timeoutSignal(FETCH_TIMEOUT_MS);
+    fetch(`${BACKEND_URL}/api/genres`, { signal: genresTimeout.signal })
+      .finally(() => genresTimeout.cancel())
       .then((r) => r.json())
       .then((data: { genres: Genre[] }) => {
         setGenres(data.genres);

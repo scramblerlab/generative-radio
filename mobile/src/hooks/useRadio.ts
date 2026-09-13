@@ -32,6 +32,7 @@ import {
   cleanupStagingDir,
   isOfflineModePersisted,
   setOfflineModePersisted,
+  timeoutSignal,
 } from '../utils/offlineLibrary';
 
 // ------------------------------------------------------------------ //
@@ -1435,15 +1436,16 @@ export function useRadio(
     // state. Pressing this in airplane mode used to wipe the queue, stop the
     // player and drop into a reconnect loop with nothing playing — the one
     // situation where offline mode was most wanted.
+    const probe = timeoutSignal(REACHABILITY_TIMEOUT_MS);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/radio/status`, {
-        signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS),
-      });
+      const res = await fetch(`${BACKEND_URL}/api/radio/status`, { signal: probe.signal });
       if (!res.ok) throw new Error(`status ${res.status}`);
     } catch (err) {
       console.log('[Offline] exit refused — server unreachable:', err);
       setErrorMessage('Still offline — no connection to the radio');
       return;                                   // queue, player and files untouched
+    } finally {
+      probe.cancel();
     }
     setOfflineMode(false);
     setOfflineModePersisted(false);

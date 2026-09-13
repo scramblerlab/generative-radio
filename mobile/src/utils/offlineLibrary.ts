@@ -99,11 +99,35 @@ export function offlineTrackUri(trackId: string): string {
  *  socket; the panel would sit on "Loading library…" forever. */
 export const FETCH_TIMEOUT_MS = 15_000;
 
+/**
+ * A signal that aborts after `ms`.
+ *
+ * NOT `AbortSignal.timeout()`. React Native polyfills AbortSignal from the
+ * `abort-controller` package, which ships only the constructor and `aborted` —
+ * there is no static `timeout()`, so calling it throws TypeError at runtime.
+ * TypeScript does not catch this because tsconfig pulls in the DOM lib, whose
+ * AbortSignal does have it: the types describe a browser, not this runtime.
+ *
+ * Always `cancel()` in a finally, or the pending timer keeps the JS context
+ * awake for the full duration after the request has already finished.
+ */
+export function timeoutSignal(ms: number): { signal: AbortSignal; cancel: () => void } {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  return { signal: controller.signal, cancel: () => clearTimeout(id) };
+}
+
 export async function fetchLibraryIndex(token: string | null): Promise<LibraryIndexResponse> {
-  const res = await fetch(`${BACKEND_URL}/api/library/index`, {
-    headers: authHeaders(token),
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
+  const t = timeoutSignal(FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/api/library/index`, {
+      headers: authHeaders(token),
+      signal: t.signal,
+    });
+  } finally {
+    t.cancel();
+  }
   if (res.status === 401) throw new LibraryAuthError();
   if (!res.ok) throw new Error(`Index fetch failed: ${res.status}`);
   const body = await res.json() as LibraryIndexResponse;
