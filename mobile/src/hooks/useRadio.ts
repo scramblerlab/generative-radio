@@ -427,6 +427,31 @@ export function useRadio(): UseRadioReturn {
     }
   }, []);
 
+  /** The one and only way to dispose of the music player.
+   *
+   *  expo-audio's `remove()` does NOT stop playback — on both platforms it only
+   *  drops the object from the module's registry (ios/AudioModule.swift:251,
+   *  android/.../AudioModule.kt:494), leaving the native player decoding. So an
+   *  un-paused `remove()` followed by a new `createAudioPlayer()` yields two
+   *  audible streams. `pause()` is what actually stops it.
+   *
+   *  The ref is nulled *first* so a re-entrant call (e.g. a status listener
+   *  firing during teardown) cannot tear the same player down twice, and each
+   *  native call is isolated so one throwing cannot skip the rest.
+   *
+   *  TODO: `AudioPlayer` extends `SharedObject`, so `release()` exists and would
+   *  force deterministic native teardown — but it makes every later call on the
+   *  object throw and interacts badly with the status-listener lifecycle.
+   *  `pause()` is sufficient here. */
+  const teardownPlayer = useCallback(() => {
+    const player = playerRef.current;
+    playerRef.current = null;
+    if (!player) return;
+    try { player.clearLockScreenControls(); } catch {}
+    try { player.pause(); } catch {}
+    try { player.remove(); } catch {}
+  }, []);
+
   /** iOS-only: called when app returns to foreground. Re-attaches the
    *  playbackStatusUpdate listener that was removed on background. */
   const handleForegroundIOS = useCallback((wasBackground: boolean) => {
@@ -512,9 +537,11 @@ export function useRadio(): UseRadioReturn {
   };
 
   const playOfflineTrack = useCallback((meta: OfflineTrackMeta) => {
-    if (!playerReadyRef.current) return;
     stopSilenceBridge();                                  // never bridge offline
-    playerRef.current?.remove(); playerRef.current = null;
+    // Tear down BEFORE the readiness bail-out: returning early with the online
+    // player still decoding is what made online and offline audio overlap.
+    teardownPlayer();
+    if (!playerReadyRef.current) return;
 
     const player = createAudioPlayer(
       { uri: offlineTrackUri(meta.trackId) },
@@ -554,7 +581,7 @@ export function useRadio(): UseRadioReturn {
         }, ms + 3_000);
       }
     }
-  }, [attachStatusListener, stopSilenceBridge]);
+  }, [attachStatusListener, stopSilenceBridge, teardownPlayer]);
 
   const playNextOffline = useCallback(() => {
     const tracks = offlineTracksRef.current;
@@ -721,8 +748,7 @@ export function useRadio(): UseRadioReturn {
       stopSilenceBridge();
 
       // Tear down old player before creating new one
-      playerRef.current?.remove();
-      playerRef.current = null;
+      teardownPlayer();
 
 //      console.log('[Audio] Creating music player (keepAudioSessionActive:true) for:', track.songTitle);
       // updateInterval: 60_000 — we use our own startProgressTimer for UI
@@ -804,7 +830,7 @@ export function useRadio(): UseRadioReturn {
 
     isFetchingRef.current = false;
     console.log('[F&P] done — playing (bg:', isBackgroundRef.current, ')');
-  }, [sendTrackEnded, startPolling, stopPolling, startSilenceBridge, stopSilenceBridge, fetchReactions, attachStatusListener]);
+  }, [sendTrackEnded, startPolling, stopPolling, startSilenceBridge, stopSilenceBridge, fetchReactions, attachStatusListener, teardownPlayer]);
 
   // Keep the refs in sync so polling and other callbacks always call the latest version
   useEffect(() => {
@@ -1189,18 +1215,15 @@ export function useRadio(): UseRadioReturn {
       bgTrackEndTimerRef.current = null;
     }
     stopSilenceBridge();
-    if (playerReadyRef.current) {
-      try {
-        playerRef.current?.clearLockScreenControls();
-        playerRef.current?.pause();
-        playerRef.current?.remove();
-        playerRef.current = null;
-      } catch {}
-    }
-  }, [stopPolling, stopSilenceBridge]);
+    if (playerReadyRef.current) teardownPlayer();
+  }, [stopPolling, stopSilenceBridge, teardownPlayer]);
 
   const enterOfflineMode = useCallback((tracks: OfflineTrackMeta[]) => {
     if (tracks.length === 0) return;
+    // Bail before mutating anything: entering offline mode while the audio
+    // session is still initialising used to leave the banner up with the online
+    // track audible, because playOfflineTrack returned early.
+    if (!playerReadyRef.current) return;
     setOfflineMode(true);
     // ---- suppress ALL server activity ----
     stopPolling();                                        // pollTimerRef
@@ -1235,12 +1258,7 @@ export function useRadio(): UseRadioReturn {
     setOfflineMode(false);
     if (bgTrackEndTimerRef.current) { clearTimeout(bgTrackEndTimerRef.current); bgTrackEndTimerRef.current = null; }
     playerSubRef.current?.remove(); playerSubRef.current = null;
-    try {
-      playerRef.current?.clearLockScreenControls();       // same teardown as tuneOut
-      playerRef.current?.pause();
-      playerRef.current?.remove();
-    } catch {}
-    playerRef.current = null;
+    teardownPlayer();                                    // same teardown as tuneOut
     offlineTracksRef.current = new Map();
     offlineQueueRef.current = [];
     offlineQueuePosRef.current = -1;
@@ -1254,7 +1272,7 @@ export function useRadio(): UseRadioReturn {
     setRadioState('fetching');
     connectWebSocket();                                   // wsRef is null → connects
     fetchAndPlayRef.current?.();                          // resume server-driven radio
-  }, [connectWebSocket]);
+  }, [connectWebSocket, teardownPlayer]);
 
   const saveTrack = useCallback(async (trackId: string): Promise<void> => {
     const res = await fetch(`${BACKEND_URL}/api/tracks/${trackId}/save`, { method: 'POST' });
