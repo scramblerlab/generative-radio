@@ -11,6 +11,7 @@ import {
   SpaceGrotesk_700Bold,
 } from '@expo-google-fonts/space-grotesk';
 import { useRadio } from './hooks/useRadio';
+import { useAuth } from './hooks/useAuth';
 import { AppNavigator } from './navigation/AppNavigator';
 
 export default function App() {
@@ -21,7 +22,10 @@ export default function App() {
     SpaceGrotesk_600SemiBold,
     SpaceGrotesk_700Bold,
   });
-  const radio = useRadio();
+  // Auth first: useRadio needs the token for the WS upgrade, and authVersion to
+  // reconnect when the identity changes.
+  const auth = useAuth();
+  const radio = useRadio({ token: auth.token, authVersion: auth.authVersion });
 
   if (!fontsLoaded) return null;
 
@@ -29,7 +33,7 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StatusBar style="light" />
-        <AppNavigator radio={radio} />
+        <AppNavigator radio={radio} auth={auth} />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

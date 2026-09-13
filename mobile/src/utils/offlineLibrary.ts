@@ -38,6 +38,23 @@ export interface LibraryIndexResponse {
 export interface DownloadProgress { done: number; total: number; failed: number }
 export interface DownloadResult   { downloaded: OfflineTrackMeta[]; failed: number; cancelled: boolean }
 
+/** The library endpoints are members-only, so a 401 means "sign in", not
+ *  "check your connection". Distinguishing them matters: the two have
+ *  completely different fixes and the connection wording is actively
+ *  misleading when the network is fine. */
+export class LibraryAuthError extends Error {
+  constructor(message = 'Sign in to download tracks') {
+    super(message);
+    this.name = 'LibraryAuthError';
+  }
+}
+
+/** Bearer header for the library endpoints, or {} when signed out — in which
+ *  case the server answers 401 and we surface LibraryAuthError. */
+function authHeaders(token: string | null): Record<string, string> {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 // ---------- Storage layout ----------
 // Paths.document/offline/tracks/{trackId}.mp3   — audio
 // Paths.document/offline/tracks/{trackId}.json  — sidecar verbatim (written AFTER mp3 ⇒ json implies complete mp3)
@@ -50,8 +67,9 @@ export function offlineTrackUri(trackId: string): string {
   return new File(tracksDir(), `${trackId}.mp3`).uri;   // "file:///..."
 }
 
-export async function fetchLibraryIndex(): Promise<LibraryIndexResponse> {
-  const res = await fetch(`${BACKEND_URL}/api/library/index`);
+export async function fetchLibraryIndex(token: string | null): Promise<LibraryIndexResponse> {
+  const res = await fetch(`${BACKEND_URL}/api/library/index`, { headers: authHeaders(token) });
+  if (res.status === 401) throw new LibraryAuthError();
   if (!res.ok) throw new Error(`Index fetch failed: ${res.status}`);
   return await res.json() as LibraryIndexResponse;
 }
@@ -151,7 +169,12 @@ export async function downloadTracks(
   selected: OfflineTrackMeta[],
   onProgress: (p: DownloadProgress) => void,
   isCancelled: () => boolean,
+  token: string | null,
 ): Promise<DownloadResult> {
+  // Every file is an authenticated request. Failing up front beats letting all
+  // N of them 401 one by one and reporting them as ordinary download failures.
+  if (!token) throw new LibraryAuthError();
+
   // Disk-space pre-check (soft): throw a user-readable error before clearing anything.
   if (Paths.availableDiskSpace < selected.length * AVG_TRACK_BYTES) {
     throw new Error(
@@ -172,7 +195,7 @@ export async function downloadTracks(
     let ok = false;
     for (let attempt = 0; attempt < 2 && !ok; attempt++) {       // 1 retry per file
       try {
-        await File.downloadFileAsync(url, mp3, { idempotent: true });
+        await File.downloadFileAsync(url, mp3, { idempotent: true, headers: authHeaders(token) });
         ok = true;
       } catch (err) {
         if (attempt === 0) await new Promise((r) => setTimeout(r, 1000));

@@ -15,10 +15,11 @@ import {
   ViewerListData,
   DjStateData,
   DjClaimAckData,
+  RoleAssignedData,
   ReactionState,
   ReactionUpdateData,
 } from '@radio/shared';
-import { BACKEND_URL, WS_URL } from '../config';
+import { BACKEND_URL, wsUrl } from '../config';
 import { downloadAudio } from '../utils/downloadAudio';
 import { fetchStatusNative, sendTrackEndedNative } from '../modules/backgroundHttp';
 import type { StatusResult } from '../modules/backgroundHttp';
@@ -61,8 +62,19 @@ export interface UseRadioReturn {
   djUnlockAt: number;
   activeDjName: string;
   djPanelOpen: boolean;
+  /** True iff this WS connection is authenticated — DJ mode is members-only.
+   *  Comes from role_assigned, so it reflects what the *server* sees, not just
+   *  whether we hold a token locally. */
+  djAvailable: boolean;
+  /** The signed-in nickname the server will attribute a DJ session to. */
+  djNickname: string;
+  /** Why the last DJ claim was refused, when the reason needs explaining.
+   *  'locked' is already covered by the on-screen countdown, so it is not
+   *  reported here. Cleared on the next role_assigned. */
+  djClaimRefusal: 'auth_required' | 'session_expired' | null;
+  clearDjClaimRefusal: () => void;
   claimDj: () => void;
-  submitDj: (genres: string[], keywords: string[], language: string, feeling: string, djName: string) => void;
+  submitDj: (genres: string[], keywords: string[], language: string, feeling: string) => void;
   closeDjPanel: () => void;
   // Reactions
   reactionState: ReactionState;
@@ -89,7 +101,17 @@ const BG_FIRST_TRACK_WAIT_CAP_MS = 10 * 60_000;
 // JS thread mid-await and never resumed it); play_now may break its mutex.
 const FETCH_STUCK_MS = 120_000;
 
-export function useRadio(): UseRadioReturn {
+export interface RadioAuthInput {
+  /** Bearer JWT from useAuth, or null when signed out. */
+  token: string | null;
+  /** Bumped by useAuth on every sign-in / sign-out. Changing it reconnects the
+   *  WebSocket so the server re-evaluates identity on the new connection. */
+  authVersion: number;
+}
+
+export function useRadio(
+  { token, authVersion }: RadioAuthInput = { token: null, authVersion: 0 },
+): UseRadioReturn {
   // ------------------------------------------------------------------ //
   // React state
   // ------------------------------------------------------------------ //
@@ -117,6 +139,10 @@ export function useRadio(): UseRadioReturn {
   const [djUnlockAt, setDjUnlockAt] = useState(0);
   const [activeDjName, setActiveDjName] = useState('');
   const [djPanelOpen, setDjPanelOpen] = useState(false);
+  const [djAvailable, setDjAvailable] = useState(false);
+  const [djNickname, setDjNickname] = useState('');
+  const [djClaimRefusal, setDjClaimRefusal] =
+    useState<'auth_required' | 'session_expired' | null>(null);
 
   // Reactions
   const emptyReaction: ReactionState = { thumbUp: 0, thumbDown: 0, userReaction: null };
@@ -148,6 +174,10 @@ export function useRadio(): UseRadioReturn {
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isActiveRef = useRef(false);
   const isBackgroundRef = useRef(false);
+  // connectWebSocket has no dependencies (it must not be re-created on every
+  // render), so it reads the live token from a ref rather than closing over it.
+  const tokenRef = useRef<string | null>(token);
+  tokenRef.current = token;
   const playerReadyRef = useRef(false);
 
   // playbackStatusUpdate subscription — stored so we can remove it in background
@@ -926,9 +956,11 @@ export function useRadio(): UseRadioReturn {
   const connectWebSocket = useCallback(() => {
     if (offlineModeRef.current) return;
     if (!isActiveRef.current) return;
-    console.log('[WS] Connecting to', WS_URL);
+    // Never log the URL itself — it carries the token.
+    const url = wsUrl(tokenRef.current);
+    console.log('[WS] Connecting', tokenRef.current ? '(authenticated)' : '(anonymous)');
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -1019,14 +1051,31 @@ export function useRadio(): UseRadioReturn {
       } else if (msg.event === 'error') {
         const { message } = msg.data as unknown as ErrorData;
         setErrorMessage(message);
+      } else if (msg.event === 'role_assigned') {
+        // The server's verdict on this connection's identity. djAvailable is
+        // true iff the token was accepted on the upgrade, so it — not the mere
+        // presence of a local token — is what the DJ button is gated on.
+        const d = msg.data as unknown as RoleAssignedData;
+        console.log('[WS] role_assigned — role:', d.role, 'djAvailable:', d.djAvailable);
+        setDjAvailable(d.djAvailable);
+        setDjNickname(d.nickname ?? '');
+        // Identity was just re-evaluated; any earlier refusal is now stale.
+        setDjClaimRefusal(null);
       } else if (msg.event === 'dj_state') {
         const d = msg.data as unknown as DjStateData;
         setDjLocked(d.locked);
         setDjUnlockAt(d.unlockAt);
         setActiveDjName(d.activeDjName);
       } else if (msg.event === 'dj_claim_ack') {
-        const { granted } = msg.data as unknown as DjClaimAckData;
-        if (granted) setDjPanelOpen(true);
+        const { granted, reason } = msg.data as unknown as DjClaimAckData;
+        console.log('[DJ] Claim ack — granted:', granted, reason ? `(${reason})` : '');
+        if (granted) {
+          setDjPanelOpen(true);
+          setDjClaimRefusal(null);
+        } else if (reason === 'auth_required' || reason === 'session_expired') {
+          // 'locked' needs no message — the countdown on screen already says so.
+          setDjClaimRefusal(reason);
+        }
       } else if (msg.event === 'reaction_update') {
         const d = msg.data as unknown as ReactionUpdateData;
         if (currentTrackIdRef.current === d.trackId) {
@@ -1075,6 +1124,34 @@ export function useRadio(): UseRadioReturn {
       stopPolling();
     };
   }, [connectWebSocket, stopPolling]);
+
+  // Identity changed (sign-in or sign-out): drop the socket and open a new one
+  // so the server re-reads the token on the upgrade. Without this the DJ button
+  // would not appear until the app was restarted.
+  const lastAuthVersion = useRef(authVersion);
+  useEffect(() => {
+    if (lastAuthVersion.current === authVersion) return;   // includes the mount pass
+    lastAuthVersion.current = authVersion;
+    // The server's old verdict describes an identity we no longer have, so it
+    // is stale in every mode — clear it before deciding whether to reconnect.
+    setDjAvailable(false);
+    setDjNickname('');
+    setDjClaimRefusal(null);
+    // Offline mode deliberately holds no socket. Signing out mid-playback must
+    // not reconnect — or interrupt the track. exitOfflineMode connects later
+    // with whatever identity is current by then.
+    if (offlineModeRef.current || !isActiveRef.current) return;
+    if (wsRef.current) {
+      const dyingWs = wsRef.current;
+      wsRef.current = null;
+      dyingWs.onclose = null;        // this close is intentional — do not back off
+      dyingWs.close();
+    }
+    if (pingIntervalRef.current) { clearInterval(pingIntervalRef.current); pingIntervalRef.current = null; }
+    if (reconnectTimer.current)  { clearTimeout(reconnectTimer.current);   reconnectTimer.current  = null; }
+    reconnectDelay.current = RECONNECT_BASE_MS;
+    connectWebSocket();
+  }, [authVersion, connectWebSocket]);
 
   // AppState: handle foreground/background transitions
   useEffect(() => {
@@ -1284,12 +1361,15 @@ export function useRadio(): UseRadioReturn {
 
   const claimDj = useCallback(() => sendWS({ event: 'dj_claim' }), [sendWS]);
 
+  const clearDjClaimRefusal = useCallback(() => setDjClaimRefusal(null), []);
+
   const submitDj = useCallback((
     genres: string[], keywords: string[],
-    language: string, feeling: string, djName: string,
+    language: string, feeling: string,
   ) => {
     setDjPanelOpen(false);
-    sendWS({ event: 'dj_submit', data: { genres, keywords, language, feeling, djName } });
+    // No djName: the server attributes the session to the authenticated user.
+    sendWS({ event: 'dj_submit', data: { genres, keywords, language, feeling } });
   }, [sendWS]);
 
   const closeDjPanel = useCallback(() => {
@@ -1382,6 +1462,7 @@ export function useRadio(): UseRadioReturn {
     tuneIn, tuneOut, saveTrack,
     togglePlayPause, seekBackward, seekForward,
     djLocked, djUnlockAt, activeDjName, djPanelOpen,
+    djAvailable, djNickname, djClaimRefusal, clearDjClaimRefusal,
     claimDj, submitDj, closeDjPanel,
     reactionState, react,
     offlineMode, offlineTrackCount, enterOfflineMode, exitOfflineMode,
