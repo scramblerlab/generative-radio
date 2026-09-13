@@ -10,7 +10,9 @@ import {
   OfflineTrackMeta,
   DownloadProgress,
   fetchLibraryIndex,
+  FETCH_TIMEOUT_MS,
   LibraryAuthError,
+  LibraryDisabledError,
   filterTracks,
   sampleTracks,
   scanOfflineTracks,
@@ -28,17 +30,41 @@ interface Props {
   onStartOffline: (tracks: OfflineTrackMeta[]) => void;
   /** Bearer token for the members-only library endpoints. */
   token: string | null;
+  /** False while offline mode is playing from the library on disk. DOWNLOAD
+   *  replaces that library, so it must not run against the files feeding the
+   *  current playback. */
+  allowClear: boolean;
 }
 
 type Phase = 'setup' | 'downloading';
 
-export function OfflinePanel({ visible, onClose, onStartOffline, token }: Props) {
+/** The three ways listing the library can fail have three different fixes, so
+ *  they get three different sentences. "Check connection" for a 401 sent the
+ *  user to their router when the real answer was "sign in". */
+function describeIndexError(err: unknown): string {
+  if (err instanceof LibraryAuthError) return 'Sign in to download tracks';
+  if (err instanceof LibraryDisabledError) return 'The track library is unavailable on the server';
+  if (err instanceof Error && err.name === 'TimeoutError') return 'The server took too long to respond';
+  return 'Library unavailable — check connection';
+}
+
+function describeDownloadError(err: unknown): string {
+  if (err instanceof LibraryAuthError) return 'Your session expired — sign in again';
+  // Disk-space and invariant messages are already written for the user.
+  return err instanceof Error ? err.message : 'Download failed';
+}
+
+export function OfflinePanel({ visible, onClose, onStartOffline, token, allowClear }: Props) {
   const [phase, setPhase] = useState<Phase>('setup');
   const [maxTracksText, setMaxTracksText] = useState(String(DEFAULT_MAX_TRACKS));
   const [keyword, setKeyword] = useState('');
   const [genreId, setGenreId] = useState('');
   const [index, setIndex] = useState<OfflineTrackMeta[] | null>(null);
+  // Two independent failures that used to share one slot. indexError describes
+  // the library listing; downloadError describes the last download attempt. With
+  // one variable, a stale download failure hid the live "Found N tracks" line.
   const [indexError, setIndexError] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [genres, setGenres] = useState<Genre[]>([]);
   const [existingCount, setExistingCount] = useState(0);
   const [progress, setProgress] = useState<DownloadProgress>({ done: 0, total: 0, failed: 0 });
@@ -49,6 +75,7 @@ export function OfflinePanel({ visible, onClose, onStartOffline, token }: Props)
     if (!visible) return;
     setPhase('setup');
     setIndexError(null);
+    setDownloadError(null);
     setCancelling(false);
     setExistingCount(scanOfflineTracks().length);
 
@@ -56,14 +83,12 @@ export function OfflinePanel({ visible, onClose, onStartOffline, token }: Props)
       .then((r) => setIndex(r.tracks))
       .catch((err) => {
         setIndex([]);
-        // A 401 is a sign-in problem, not a connectivity one — saying "check
-        // connection" when the network is fine sends the user the wrong way.
-        setIndexError(err instanceof LibraryAuthError
-          ? 'Sign in to download tracks'
-          : 'Library unavailable — check connection');
+        setIndexError(describeIndexError(err));
       });
 
-    fetch(`${BACKEND_URL}/api/genres`)
+    // Same bound as the index fetch: without it a half-open socket leaves the
+    // genre pills missing with no explanation and no cached fallback applied.
+    fetch(`${BACKEND_URL}/api/genres`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
       .then((r) => r.json())
       .then((data: { genres: Genre[] }) => {
         setGenres(data.genres);
@@ -86,6 +111,10 @@ export function OfflinePanel({ visible, onClose, onStartOffline, token }: Props)
     [index, keyword, genreId]
   );
 
+  // Changing the selection means the previous failure no longer describes what
+  // the button would do, so it stops being shown.
+  useEffect(() => { setDownloadError(null); }, [keyword, genreId, maxTracks]);
+
   const handleMaxTracksBlur = () => {
     setMaxTracksText(String(maxTracks));
   };
@@ -99,30 +128,43 @@ export function OfflinePanel({ visible, onClose, onStartOffline, token }: Props)
     setPhase('downloading');
     setProgress({ done: 0, total: selected.length, failed: 0 });
     try {
-      const result = await downloadTracks(selected, setProgress, () => cancelRef.current, token);
-      if (result.cancelled) {
-        // Partial set kept on disk — playable via PLAY EXISTING TRACKS.
-        setExistingCount(scanOfflineTracks().length);
-        setPhase('setup');
+      const result = await downloadTracks(
+        selected, setProgress, () => cancelRef.current, token, allowClear,
+      );
+      if (result.downloaded.length === 0) {
+        setDownloadError(result.cancelled
+          ? 'Cancelled before any track finished — your existing library is unchanged'
+          : 'Download failed — your existing library is unchanged');
         return;
       }
-      if (result.downloaded.length === 0) {
-        setPhase('setup');
-        setIndexError('Download failed — no tracks saved');
+      if (result.cancelled) {
+        // A partial set was swapped in; it is playable, but do not tune into it
+        // behind the user's back — they asked to stop.
+        setDownloadError(`Cancelled — kept the ${result.downloaded.length} tracks that finished`);
         return;
       }
       onStartOffline(result.downloaded);
-      setPhase('setup');
       onClose();
     } catch (err) {
+      setDownloadError(describeDownloadError(err));
+    } finally {
+      // Every exit path, not just the cancelled one. Otherwise a failed download
+      // left "PLAY EXISTING TRACKS (312)" on screen against an empty library and
+      // the button silently did nothing.
+      setExistingCount(scanOfflineTracks().length);
       setPhase('setup');
-      setIndexError(String((err as Error).message));
     }
   };
 
   const handlePlayExisting = () => {
     const tracks = scanOfflineTracks();
-    if (tracks.length === 0) return;
+    if (tracks.length === 0) {
+      // Reachable when the on-disk set changed under us. Say so rather than
+      // being an unresponsive button.
+      setExistingCount(0);
+      setDownloadError('No downloaded tracks on this device yet');
+      return;
+    }
     onStartOffline(tracks);
     onClose();
   };
@@ -199,6 +241,9 @@ export function OfflinePanel({ visible, onClose, onStartOffline, token }: Props)
               ) : (
                 <Text style={styles.foundText}>Found {found} tracks</Text>
               )}
+              {/* A download failure is about the last attempt, not about the
+                  listing, so it never replaces the line above. */}
+              {downloadError && <Text style={styles.downloadErrorText}>{downloadError}</Text>}
             </ScrollView>
 
             <View style={styles.footer}>
@@ -218,6 +263,9 @@ export function OfflinePanel({ visible, onClose, onStartOffline, token }: Props)
                   PLAY EXISTING TRACKS ({existingCount})
                 </Text>
               </TouchableOpacity>
+              {existingCount === 0 && (
+                <Text style={styles.emptyLibraryText}>No tracks downloaded yet</Text>
+              )}
               <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
@@ -274,6 +322,8 @@ const styles = StyleSheet.create({
 
   foundText: { fontFamily: fonts.semiBold, color: colors.accent, fontSize: 14, marginTop: 20 },
   foundTextMuted: { fontFamily: fonts.regular, color: colors.textMuted, fontSize: 13, marginTop: 20 },
+  downloadErrorText: { fontFamily: fonts.regular, color: colors.red, fontSize: 13, marginTop: 8 },
+  emptyLibraryText: { fontFamily: fonts.regular, color: colors.textMuted, fontSize: 12, textAlign: 'center' },
 
   footer: { padding: 20, paddingBottom: 40, borderTopWidth: 1, borderTopColor: colors.border, gap: 12 },
   submitBtn: { paddingVertical: 14, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center' },
