@@ -757,12 +757,12 @@ Web を `@radio/shared` に接続。`replay?: boolean` を共通 `Track` に移�
 
 `release()` の調査、`?token=` を置き換える接続後 auth フレーム、library-audio のユーザー単位レート制限、`backend/scripts/create_user.py` CLI。
 
-**追加（2026-09-13、PR 6 作業中の調査で判明）**
+**追加（2026-09-13、PR 6 作業中の調査で判明）— 2 件とも修正済み（PR 9）**
 
-1. **`dj_claim_ack` の `'locked'` が完全に無音になり得る（モバイル）。** [useRadio.ts](mobile/src/hooks/useRadio.ts) は `'locked'` を意図的に無表示にしている（「画面のカウントダウンが説明しているから」）。しかしその前提が常に成り立つわけではない: [RadioPlayer.tsx:217](mobile/src/components/RadioPlayer.tsx#L217) は `djUnlockAt === 0` のとき `remainingSec = Infinity` とし、`djCountdown` は `Infinity` を除外するのでカウントダウンは描画されない。クライアントの `dj_state` がサーバより古い場合、ボタンは押せる見た目のまま拒否され、画面には何も出ない。`'locked'` にも一言出すべき。
-2. **`remove_ws` が `_dj_lock_until` を戻さない（バックエンド）。** [cancel_dj_claim_from_ws](backend/radio.py#L1529) は `self._dj_lock_until = time.time()` でロックを即時解除するが、[remove_ws](backend/radio.py#L189) は `_dj_claimant_ws` を解放するだけ。claim 保持中に切断すると、誰も DJ をしていないのにクールダウン満了までスロットがロックされる。**PR 7 でサインイン時に WS を張り直すようにしたため、この経路を通る頻度が上がっている。**
+1. ~~**`dj_claim_ack` の `'locked'` が完全に無音になり得る（モバイル）。**~~ **修正済み。** [useRadio.ts](mobile/src/hooks/useRadio.ts) は `'locked'` を意図的に無表示にしている（「画面のカウントダウンが説明しているから」）。しかしその前提が常に成り立つわけではない: [RadioPlayer.tsx:217](mobile/src/components/RadioPlayer.tsx#L217) は `djUnlockAt === 0` のとき `remainingSec = Infinity` とし、`djCountdown` は `Infinity` を除外するのでカウントダウンは描画されない。クライアントの `dj_state` がサーバより古い場合、ボタンは押せる見た目のまま拒否され、画面には何も出ない。→ `showTransientNotice()` で既存のエラーバナーに一言出し、数秒で自動的に引っ込めるようにした。
+2. ~~**`remove_ws` が `_dj_lock_until` を戻さない（バックエンド）。**~~ **修正済み。** [cancel_dj_claim_from_ws](backend/radio.py#L1529) は `self._dj_lock_until = time.time()` でロックを即時解除するが、[remove_ws](backend/radio.py#L189) は `_dj_claimant_ws` を解放するだけ。claim 保持中に切断すると、誰も DJ をしていないのにクールダウン満了までスロットがロックされる。**PR 7 でサインイン時に WS を張り直すようにしたため、この経路を通る頻度が上がっていた。**→ `remove_ws` を cancel と同じ扱い（claimant 解放 + ロック即時解除）にした。submit 済みなら `_dj_claimant_ws` は既に `None` なので分岐は発火せず、セッション間クールダウンは保たれる。`tests/test_dj_gate.py` に両方向の回帰テストを追加。
 
-**追加（2026-09-08 に実際に発生した障害）— `uv run --frozen` で外部障害に耐えるようにする**
+**~~追加（2026-09-08 に実際に発生した障害）— `uv run --frozen` で外部障害に耐えるようにする~~ — 実装済み（`d600282` / PR #102）。以下は経緯の記録。**
 
 `scripts/start_prod.sh:99` は ACE-Step を `uv run acestep-api` で起動している。`uv run` は起動のたびにロックファイルを検証し、**直接 URL で指定された依存はメタデータを取得しにいく**。ACE-Step の `uv.lock` には Windows 専用の `flash-attn` wheel が直接 URL で入っており（`sys_platform == 'win32'` マーカー付きなので macOS では決してインストールされない）、その GitHub Releases URL が一時的に 500 を返した結果、**ロック検証ごと失敗して ACE-Step が起動できず、ラジオ全体が上がらなかった**。
 
