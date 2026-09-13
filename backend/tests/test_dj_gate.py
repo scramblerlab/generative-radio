@@ -6,6 +6,7 @@ unless a track is generated, and nothing here generates.
 """
 
 import asyncio
+import time
 
 import pytest
 
@@ -259,3 +260,54 @@ def test_logged_out_controller_keeps_the_typed_name(radio):
 
     asyncio.run(radio.start_from_ws(ws, ["rock"], [], "en", "", None, "Local Host"))
     assert radio._dj_name == "Local Host"
+
+
+# ---- releasing the slot ---- #
+
+def test_disconnecting_claimant_releases_the_lock(radio):
+    """A claimant that drops without submitting frees the slot immediately.
+
+    remove_ws used to clear _dj_claimant_ws but leave _dj_lock_until at
+    claim-time + _DJ_LOCK_S, so for the whole cooldown nobody could claim even
+    though nobody was DJing. cancel_dj_claim_from_ws always released both; a
+    dropped connection is the same situation and now gets the same treatment.
+    """
+    (u1, t1), (u2, t2) = token_for("A", "u1"), token_for("B", "u2")
+    first, second = FakeWS(), FakeWS()
+    connect(radio, first, u1, t1)
+    connect(radio, second, u2, t2)
+    radio._dj_lock_until = 0
+    sent = []
+    radio._send_to = lambda w, m: sent.append(m) or asyncio.sleep(0)
+
+    async def scenario():
+        await radio.claim_dj_from_ws(first)
+        assert radio._dj_lock_until > time.time()      # claim re-locks for others
+        radio.remove_ws(first)                         # drops without submitting
+        sent.clear()
+        await radio.claim_dj_from_ws(second)
+
+    asyncio.run(scenario())
+    assert ack(sent)["granted"] is True
+    assert radio._dj_claimant_ws is second
+
+
+def test_disconnect_by_a_non_claimant_keeps_the_cooldown(radio):
+    """The release is scoped to a pending claim.
+
+    submit_dj_from_ws clears _dj_claimant_ws and deliberately leaves the lock
+    running — that cooldown is what spaces DJ sessions apart. So a disconnect
+    while no claim is pending must not shorten it.
+    """
+    user, token = token_for()
+    ws = FakeWS()
+    connect(radio, ws, user, token)
+    radio._dj_claimant_ws = None                       # as it is after a submit
+    locked_until = time.time() + 120
+    radio._dj_lock_until = locked_until
+
+    async def scenario():
+        radio.remove_ws(ws)
+
+    asyncio.run(scenario())
+    assert radio._dj_lock_until == locked_until

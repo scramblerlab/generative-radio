@@ -112,6 +112,8 @@ const FETCH_STUCK_MS = 120_000;
 const MAX_TRACK_MS = 6 * 60_000;
 // How long to wait for the server before deciding we are still offline.
 const REACHABILITY_TIMEOUT_MS = 4_000;
+// How long a transient notice stays in the error banner before retracting.
+const NOTICE_MS = 6_000;
 
 export interface RadioAuthInput {
   /** Bearer JWT from useAuth, or null when signed out. */
@@ -202,6 +204,8 @@ export function useRadio(
   const bgWaitCapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Offline background watchdog — fires only if nothing else advanced the queue.
   const bgWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Auto-clear for transient notices shown in the error banner.
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // expo-audio player refs
   const playerRef = useRef<AudioPlayer | null>(null);        // active music player
@@ -288,6 +292,22 @@ export function useRadio(
   // ------------------------------------------------------------------ //
   // Internal helpers
   // ------------------------------------------------------------------ //
+
+  /** Show a message in the existing error banner and take it back down again.
+   *
+   *  Used for refusals the user needs to see but that are not error states to
+   *  sit in — the banner is the only channel the player already has, and this
+   *  keeps a momentary "someone else took the DJ slot" from looking like a
+   *  persistent failure. */
+  const showTransientNotice = useCallback((message: string) => {
+    setErrorMessage(message);
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => {
+      noticeTimerRef.current = null;
+      // Only retract our own notice: anything set since is a real message.
+      setErrorMessage((current) => (current === message ? null : current));
+    }, NOTICE_MS);
+  }, []);
 
   const sendWS = useCallback((data: object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -1127,8 +1147,15 @@ export function useRadio(
           setDjPanelOpen(true);
           setDjClaimRefusal(null);
         } else if (reason === 'auth_required' || reason === 'session_expired') {
-          // 'locked' needs no message — the countdown on screen already says so.
           setDjClaimRefusal(reason);
+        } else {
+          // Previously silent, on the assumption that the on-screen countdown
+          // already explained a 'locked' refusal. It does not always: the
+          // countdown is hidden whenever djUnlockAt is 0, and the button is
+          // only tappable when this client believes the slot is free — which is
+          // exactly when the server disagreeing produces no feedback at all.
+          // Reaching here therefore means nothing on screen accounts for it.
+          showTransientNotice('DJ mode was just taken — try again in a moment');
         }
       } else if (msg.event === 'reaction_update') {
         const d = msg.data as unknown as ReactionUpdateData;
@@ -1196,6 +1223,7 @@ export function useRadio(
       isActiveRef.current = false;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
       wsRef.current?.close();
       stopPolling();
     };

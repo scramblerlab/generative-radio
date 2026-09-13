@@ -193,7 +193,17 @@ class RadioOrchestrator:
         logger.info(f"[radio] WS disconnected — total connections: {len(self._ws_connections)}")
 
         if ws == self._dj_claimant_ws:
+            # Reaching here means the claimant left without submitting, so this
+            # is the same situation as an explicit cancel and gets the same
+            # release. Clearing the claimant alone left _dj_lock_until at
+            # claim-time + _DJ_LOCK_S, so the slot stayed locked for the full
+            # cooldown with nobody DJing and no way for anyone to take it.
+            #
+            # A claimant that already submitted is not affected: submit clears
+            # _dj_claimant_ws, so this branch does not fire and the cooldown
+            # between DJ sessions is preserved.
             self._dj_claimant_ws = None
+            self._dj_lock_until = time.time()
             asyncio.create_task(self._broadcast_dj_state())
 
         if ws == self._controller_ws:
